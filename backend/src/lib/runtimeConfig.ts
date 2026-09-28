@@ -94,6 +94,22 @@ export function uploadJobWallClockMs(
   );
 }
 
+/**
+ * Deadline for synchronous SheetJS parsing in its killable child process.
+ * Overrides cannot disable the deadline or extend it past ten seconds.
+ */
+export function spreadsheetParsingConfiguration(
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  return {
+    timeoutMs: clamp(
+      envInt("SPREADSHEET_PARSE_TIMEOUT_MS", 5_000, env),
+      1_000,
+      10_000,
+    ),
+  };
+}
+
 function parsedUrl(value: string, name: string, errors: string[]): URL | null {
   try {
     const url = new URL(value);

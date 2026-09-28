@@ -34,5 +34,8 @@ backend/supabase/*
 .implementation-plan.md
 .implement-config
 
+# Private local security audit record.
+/audit.md
+
 # Local review artifact; it is a nested repository, not application source.
 /pr-267-analysis-site/

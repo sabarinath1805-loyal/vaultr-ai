@@ -15,6 +15,20 @@ storage instead of the infrastructure bundled with Docker Compose.
 
 ## Database setup
 
+Vaultr's supported application-object migration creator is `postgres`. Before
+running `backend/schema.sql` or any migration, check the effective execution
+identity in the same session:
+
+```sql
+select session_user, current_user;
+```
+
+`current_user` must be `postgres` before Vaultr DDL runs. A verified privileged
+execution path may issue `SET ROLE postgres`, then repeat the check; do not
+assume the Supabase SQL Editor uses that role. If the effective creator is not
+`postgres` and cannot be switched to it, stop the migration and verify the
+deployment path. Do not change `supabase_admin` defaults as a workaround.
+
 For a fresh Supabase database, run the contents of `backend/schema.sql` in the
 Supabase SQL editor. The schema file contains the complete current database
 shape.

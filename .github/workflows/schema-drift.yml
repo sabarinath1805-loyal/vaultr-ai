@@ -92,13 +92,11 @@ jobs:
           read_key() { node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(String(JSON.parse(s)['$1']??'')))" <<<"$STATUS"; }
           echo "SUPABASE_TEST_DB_URL=$(read_key DB_URL)" >> "$GITHUB_ENV"
 
-      # Both databases are built in the same Postgres instance (so role OIDs
-      # and versions are identical), one after the other, each starting from
-      # an identically reset `public` schema. All of Mike's application
-      # objects live in `public`; the only outside reference is auth.users,
-      # which the reset leaves untouched (schema.sql re-creates its trigger
-      # with `drop trigger if exists` first).
-      - name: Build upgraded and fresh databases, fingerprint both
+      # Construct the upgrade state in one clean local Postgres instance.
+      # A schema reset cannot reset database-level pg_default_acl changes made
+      # by migrations, so the fresh state is built only after this entire
+      # Supabase stack and its data volumes have been removed and reinitialized.
+      - name: Build upgraded database, fingerprint it
         run: |
           test -n "$SUPABASE_TEST_DB_URL"
 
@@ -124,6 +122,34 @@ jobs:
           done
           fingerprint /tmp/upgraded.txt
           echo "::endgroup::"
+
+      - name: Reinitialize clean local Supabase stack for fresh path
+        run: |
+          supabase stop --no-backup
+          env -u SUPABASE_INTERNAL_IMAGE_REGISTRY supabase start \
+            -x studio,imgproxy,mailpit,logflare,vector,realtime,storage-api,edge-runtime,postgres-meta,supavisor
+
+          STATUS="$(supabase status -o json)"
+          read_key() { node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write(String(JSON.parse(s)['$1']??'')))" <<<"$STATUS"; }
+          SUPABASE_TEST_DB_URL="$(read_key DB_URL)"
+          test -n "$SUPABASE_TEST_DB_URL"
+          echo "SUPABASE_TEST_DB_URL=$SUPABASE_TEST_DB_URL" >> "$GITHUB_ENV"
+
+      - name: Build current-schema database, fingerprint it
+        run: |
+          test -n "$SUPABASE_TEST_DB_URL"
+
+          reset_public() {
+            psql "$SUPABASE_TEST_DB_URL" -X --set ON_ERROR_STOP=1 \
+              -c 'drop schema public cascade;' \
+              -c 'create schema public;' \
+              -c 'grant usage on schema public to anon, authenticated, service_role;'
+          }
+          fingerprint() {
+            psql "$SUPABASE_TEST_DB_URL" -XAtq \
+              --set ON_ERROR_STOP=1 \
+              -f backend/scripts/schema-fingerprint.sql > "$1"
+          }
 
           echo "::group::Fresh path: current schema.sql"
           reset_public
@@ -152,4 +178,11 @@ jobs:
             echo "new dated migration so existing deployments receive the change too."
             echo "Never edit an already-shipped migration to make this check pass."
             exit 1
+          fi
+
+      - name: Stop disposable local Supabase stack
+        if: always()
+        run: |
+          if [ -f supabase/config.toml ]; then
+            supabase stop --no-backup
           fi

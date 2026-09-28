@@ -1405,6 +1405,7 @@ export async function readDocumentContent(
   opts?: {
     emitEvents?: boolean;
     readIdentity?: Awaited<ReturnType<typeof getTurnReadIdentity>>;
+    signal?: AbortSignal;
   },
 ): Promise<string> {
   const emitEvents = opts?.emitEvents ?? true;
@@ -1544,7 +1545,9 @@ export async function readDocumentContent(
     } else if (isSpreadsheetDocumentType(fileType)) {
       // SheetJS reads .xlsx/.xlsm/.xls directly (no PDF detour), emitting a
       // cell-addressed markdown view with Excel-formatted values.
-      text = spreadsheetToLLMText(Buffer.from(raw));
+      text = await spreadsheetToLLMText(Buffer.from(raw), {
+        signal: opts?.signal,
+      });
       devLog(
         `[read_document] spreadsheet extracted length=${text.length} for filename="${docInfo.filename}"`,
       );
@@ -1745,6 +1748,7 @@ export async function findInDocumentContent(params: {
   docIndex?: DocIndex;
   db?: Db;
   readIdentity?: Awaited<ReturnType<typeof getTurnReadIdentity>>;
+  signal?: AbortSignal;
 }): Promise<string> {
   const {
     docLabel,
@@ -1755,6 +1759,7 @@ export async function findInDocumentContent(params: {
     write,
     docIndex,
     db,
+    signal,
   } = params;
 
   if (!query || !query.trim()) {
@@ -1797,7 +1802,7 @@ export async function findInDocumentContent(params: {
     write,
     docIndex,
     db,
-    { emitEvents: false, readIdentity },
+    { emitEvents: false, readIdentity, signal },
   );
   if (!text || text === "Document could not be read.") {
     write(

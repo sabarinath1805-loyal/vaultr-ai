@@ -1,109 +1,159 @@
-import * as XLSX from "xlsx";
+import { fork, type ChildProcess } from "node:child_process";
+import path from "node:path";
+import { spreadsheetParsingConfiguration } from "./runtimeConfig";
+
+/** Maximum number of simultaneous parser children for one backend process. */
+export const MAX_CONCURRENT_SPREADSHEET_PARSERS = 2;
+
+// This limits the child V8 heap. It is not an operating-system RSS limit.
+const SPREADSHEET_PARSER_HEAP_MB = 256;
+let activeParsers = 0;
+
+export type SpreadsheetParseErrorCode =
+  "busy" | "timeout" | "cancelled" | "parse_failed" | "worker_failed";
+
+const ERROR_MESSAGES: Record<SpreadsheetParseErrorCode, string> = {
+  busy: "Spreadsheet readers are busy. Please try again.",
+  timeout: "Spreadsheet could not be read within the processing limit.",
+  cancelled: "Spreadsheet reading was cancelled.",
+  parse_failed: "Spreadsheet could not be read.",
+  worker_failed: "Spreadsheet processing failed.",
+};
+
+/** Safe, categorized parser failure; it never contains SheetJS details. */
+export class SpreadsheetParseError extends Error {
+  constructor(readonly code: SpreadsheetParseErrorCode) {
+    super(ERROR_MESSAGES[code]);
+    this.name = "SpreadsheetParseError";
+  }
+}
+
+export type SpreadsheetParseOptions = {
+  signal?: AbortSignal;
+  /** Notifies instrumentation after the isolated child is ready to parse. */
+  onParserStarted?: (pid: number) => void;
+};
+
+type ChildMessage =
+  | { type: "started"; pid: number }
+  | { type: "result"; text: string }
+  | { type: "parse_error" };
 
 /**
- * Spreadsheet parsing for the LLM read path.
- *
- * Replaces the old regex-over-OOXML extractor (`extractSpreadsheetText`) with a
- * real reader. SheetJS handles `.xlsx`, `.xlsm`, and legacy `.xls` uniformly and
- * exposes `cell.w` — the Excel-formatted display string — so dates and currency
- * reach the model the way a human sees them (`3/1/26`, `$1,200`) rather than as
- * raw serial numbers. Cached formula results are used (we never show formulas).
- *
- * The output is a compact, cell-addressed markdown table per sheet: a header row
- * of column letters plus a leftmost row-number column. That lets the model name
- * any cell as `Sheet!<col><row>` (e.g. `Q3 Budget!B7`) for cell-level citations,
- * with none of the old `Row N:` / `|`-separator noise.
+ * Extract a spreadsheet as cell-addressed markdown for the LLM. SheetJS runs
+ * in a fresh, killable child process; the shared API event loop never executes
+ * the synchronous parser.
  */
-
-/** Formatted display text for a cell (`w`), falling back to the raw value. */
-function cellDisplayText(cell: XLSX.CellObject | undefined): string {
-  if (!cell) return "";
-  if (typeof cell.w === "string" && cell.w.length > 0) return cell.w;
-  if (cell.v == null) return "";
-  return String(cell.v);
-}
-
-/** Escape a cell value so it can't break the markdown table layout. */
-function sanitizeCellText(value: string): string {
-  return value.replace(/\r?\n/g, " ").replace(/\|/g, "\\|").trim();
-}
-
-function renderSheet(sheetName: string, ws: XLSX.WorkSheet): string | null {
-  const ref = ws["!ref"];
-  if (!ref) return null;
-  const range = XLSX.utils.decode_range(ref);
-
-  // Map each merged range's top-left (anchor) address to its encoded range so we
-  // can tag the anchor inline (e.g. `Amount ⟨merged B2:C2⟩`). The covered cells
-  // stay blank, so the model never reads a covered address (e.g. B1 inside
-  // A1:C1) as its own value; the tag tells it the anchor spans that range, and
-  // to cite the whole range for anything in it.
-  const mergeAnchors = new Map<string, string>();
-  for (const m of ws["!merges"] ?? []) {
-    mergeAnchors.set(XLSX.utils.encode_cell(m.s), XLSX.utils.encode_range(m));
+export async function spreadsheetToLLMText(
+  buffer: Buffer,
+  options: SpreadsheetParseOptions = {},
+): Promise<string> {
+  if (options.signal?.aborted) {
+    throw new SpreadsheetParseError("cancelled");
+  }
+  if (activeParsers >= MAX_CONCURRENT_SPREADSHEET_PARSERS) {
+    throw new SpreadsheetParseError("busy");
   }
 
-  // Build a trimmed grid: capture formatted text for every cell in the used
-  // range, then drop trailing empty columns and fully empty rows so we don't
-  // emit oceans of blank cells.
-  const rows: { rowNumber: number; cells: string[] }[] = [];
-  let lastNonEmptyCol = -1;
+  activeParsers++;
+  try {
+    const { timeoutMs } = spreadsheetParsingConfiguration();
+    return await parseInChild(buffer, timeoutMs, options);
+  } finally {
+    activeParsers--;
+  }
+}
 
-  for (let r = range.s.r; r <= range.e.r; r++) {
-    const cells: string[] = [];
-    let rowHasContent = false;
-    for (let c = range.s.c; c <= range.e.c; c++) {
-      const addr = XLSX.utils.encode_cell({ r, c });
-      let text = sanitizeCellText(cellDisplayText(ws[addr]));
-      const mergeRange = mergeAnchors.get(addr);
-      if (mergeRange) {
-        text = text
-          ? `${text} ⟨merged ${mergeRange}⟩`
-          : `⟨merged ${mergeRange}⟩`;
-      }
-      cells[c - range.s.c] = text;
-      if (text) {
-        rowHasContent = true;
-        if (c - range.s.c > lastNonEmptyCol) lastNonEmptyCol = c - range.s.c;
-      }
+function parseInChild(
+  buffer: Buffer,
+  timeoutMs: number,
+  options: SpreadsheetParseOptions,
+): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const extension = __filename.endsWith(".ts") ? "ts" : "js";
+    let child: ChildProcess;
+    try {
+      child = fork(
+        path.join(__dirname, `spreadsheetParserChild.${extension}`),
+        [],
+        {
+          execArgv: [
+            ...(extension === "ts" ? ["--import", "tsx"] : []),
+            `--max-old-space-size=${SPREADSHEET_PARSER_HEAP_MB}`,
+          ],
+          stdio: ["ignore", "ignore", "ignore", "ipc"],
+          serialization: "advanced",
+          // Parser children need no deployment credentials or network config.
+          env: { NODE_ENV: process.env.NODE_ENV, PATH: process.env.PATH },
+        },
+      );
+    } catch {
+      reject(new SpreadsheetParseError("worker_failed"));
+      return;
     }
-    if (rowHasContent) rows.push({ rowNumber: r + 1, cells });
-  }
 
-  if (rows.length === 0 || lastNonEmptyCol < 0) return null;
+    let result: string | undefined;
+    let failure: SpreadsheetParseError | undefined;
+    let settled = false;
+    let timer: NodeJS.Timeout;
 
-  // Column-letter header, e.g. ["A", "B", "C"] for the used columns.
-  const colLetters: string[] = [];
-  for (let c = 0; c <= lastNonEmptyCol; c++) {
-    colLetters.push(XLSX.utils.encode_col(range.s.c + c));
-  }
+    const settleAfterClose = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onAbort);
+      if (failure) reject(failure);
+      else if (result !== undefined) resolve(result);
+      else reject(new SpreadsheetParseError("worker_failed"));
+    };
 
-  const headerRow = `| Row | ${colLetters.join(" | ")} |`;
-  const separator = `| --- | ${colLetters.map(() => "---").join(" | ")} |`;
-  const bodyRows = rows.map(({ rowNumber, cells }) => {
-    const padded: string[] = [];
-    for (let c = 0; c <= lastNonEmptyCol; c++) padded.push(cells[c] ?? "");
-    return `| ${rowNumber} | ${padded.join(" | ")} |`;
+    const terminate = (error: SpreadsheetParseError) => {
+      failure ??= error;
+      child.kill("SIGKILL");
+    };
+
+    const onAbort = () => terminate(new SpreadsheetParseError("cancelled"));
+
+    child.on("message", (message: ChildMessage) => {
+      if (message?.type === "started") {
+        try {
+          options.onParserStarted?.(message.pid);
+        } catch {
+          // A diagnostic callback must never affect parser execution.
+        }
+        return;
+      }
+      if (message?.type === "result" && typeof message.text === "string") {
+        result = message.text;
+        // The response is fully received; kill the child now and settle only
+        // once the OS reports it closed, so no parser process is left behind.
+        child.kill("SIGKILL");
+        return;
+      }
+      if (message?.type === "parse_error") {
+        failure = new SpreadsheetParseError("parse_failed");
+        child.kill("SIGKILL");
+        return;
+      }
+      terminate(new SpreadsheetParseError("worker_failed"));
+    });
+
+    child.once("error", () => {
+      terminate(new SpreadsheetParseError("worker_failed"));
+    });
+    child.once("close", settleAfterClose);
+
+    timer = setTimeout(
+      () => terminate(new SpreadsheetParseError("timeout")),
+      timeoutMs,
+    );
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
+
+    if (!failure) {
+      child.send({ buffer }, (error) => {
+        if (error) terminate(new SpreadsheetParseError("worker_failed"));
+      });
+    }
   });
-
-  const lines = [`## Sheet: ${sheetName}`, "", headerRow, separator, ...bodyRows];
-
-  return lines.join("\n");
-}
-
-/**
- * Extract a spreadsheet as cell-addressed markdown for the LLM. Handles
- * `.xlsx`, `.xlsm`, and legacy `.xls` (SheetJS reads all three), so callers no
- * longer need the LibreOffice→PDF→text detour for spreadsheets.
- */
-export function spreadsheetToLLMText(buffer: Buffer): string {
-  const wb = XLSX.read(buffer, { type: "buffer" });
-  const sheets: string[] = [];
-  for (const sheetName of wb.SheetNames) {
-    const ws = wb.Sheets[sheetName];
-    if (!ws) continue;
-    const rendered = renderSheet(sheetName, ws);
-    if (rendered) sheets.push(rendered);
-  }
-  return sheets.join("\n\n").trim();
 }

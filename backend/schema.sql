@@ -3,8 +3,26 @@
 -- apply the dated incremental migration files in backend/migrations that are
 -- newer than the version of Mike they currently have deployed.
 
+-- Vaultr application DDL is supported only when created as postgres. A
+-- different current_user would own the objects and use that role's unrelated
+-- default privileges instead.
+do $$
+begin
+  if current_user <> 'postgres' then
+    raise exception 'Vaultr schema must execute as postgres (current_user is %)', current_user;
+  end if;
+end
+$$;
+
 create extension if not exists "pgcrypto";
 create extension if not exists "pg_trgm";
+
+-- The Supabase Postgres image grants all future public-table privileges to
+-- anon and authenticated. Application tables are accessed through the
+-- backend's service_role key, so new postgres-owned public tables must not
+-- inherit browser-role privileges by default.
+alter default privileges for role postgres in schema public
+  revoke all on tables from anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- User profiles
@@ -6543,6 +6561,10 @@ create trigger workflows_cleanup_direct_grants after insert or update of org_id
   on public.workflows for each row execute procedure public.cleanup_inherited_direct_grants();
 
 revoke all on public.user_profiles from anon, authenticated;
+-- Match the existing workflow-restructure migration's deny boundary. These
+-- tables must remain browser-inaccessible when future defaults are tightened.
+revoke all on public.default_workflow_installations, public.quick_actions
+  from anon, authenticated;
 revoke all on public.organizations from anon, authenticated;
 revoke all on public.org_members from anon, authenticated;
 revoke all on public.org_invitations from anon, authenticated;
@@ -7424,3 +7446,26 @@ end;
 $$;
 revoke all on function public.complete_google_workspace_oauth(text,text,jsonb), public.disconnect_google_workspace(uuid,text), public.claim_google_workspace_action(uuid,uuid) from public, anon, authenticated;
 grant execute on function public.complete_google_workspace_oauth(text,text,jsonb), public.disconnect_google_workspace(uuid,text), public.claim_google_workspace_action(uuid,uuid) to service_role;
+
+-- Future application objects are created as postgres. Establish their
+-- least-privilege defaults only after current application objects have been
+-- created so this policy does not rewrite the ACLs of existing routines.
+-- Phase 3's table revocation for anon/authenticated remains above, before
+-- application tables are created.
+alter default privileges for role postgres
+  revoke execute on functions from public;
+
+alter default privileges for role postgres in schema public
+  revoke all on tables from public, service_role;
+alter default privileges for role postgres in schema public
+  grant select, insert, update, delete on tables to service_role;
+
+alter default privileges for role postgres in schema public
+  revoke all on sequences from public, anon, authenticated, service_role;
+alter default privileges for role postgres in schema public
+  grant usage, select on sequences to service_role;
+
+alter default privileges for role postgres in schema public
+  revoke execute on functions from anon, authenticated, service_role;
+alter default privileges for role postgres in schema public
+  grant execute on functions to service_role;

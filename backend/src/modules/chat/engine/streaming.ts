@@ -611,6 +611,7 @@ export async function runLLMStream(params: {
           courtlistenerTurnState,
           apiKeys,
           nonce,
+          signal,
         );
         throwIfAborted(signal);
         for (const r of docsRead) {
@@ -792,6 +793,7 @@ export async function runLLMStream(params: {
         pending = label
           ? readDocumentContent(label, docStore, () => {}, docIndex, db, {
               emitEvents: false,
+              signal,
             })
           : Promise.resolve("");
         sourceTextByDocId.set(docId, pending);

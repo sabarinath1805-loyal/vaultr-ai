@@ -8,6 +8,7 @@ import {
   uploadJobWallClockMs,
   uploadProcessingConfiguration,
   uploadSessionRateLimitConfiguration,
+  spreadsheetParsingConfiguration,
   validateRuntimeConfiguration,
 } from "../runtimeConfig";
 
@@ -212,6 +213,38 @@ describe("upload worker deadlines", () => {
     expect(uploadJobWallClockMs({ UPLOAD_JOB_WALL_CLOCK_MS: "-5" })).toBe(
       900_000,
     );
+  });
+});
+
+describe("spreadsheet parser deadline", () => {
+  it("uses a finite five-second default", () => {
+    expect(spreadsheetParsingConfiguration({})).toEqual({ timeoutMs: 5_000 });
+  });
+
+  it("accepts positive overrides within the supported range", () => {
+    expect(
+      spreadsheetParsingConfiguration({ SPREADSHEET_PARSE_TIMEOUT_MS: "3000" }),
+    ).toEqual({ timeoutMs: 3_000 });
+  });
+
+  it("cannot be disabled or extended past ten seconds", () => {
+    for (const value of ["0", "-1", "NaN", "not-a-number"]) {
+      expect(
+        spreadsheetParsingConfiguration({
+          SPREADSHEET_PARSE_TIMEOUT_MS: value,
+        }).timeoutMs,
+      ).toBe(5_000);
+    }
+    expect(
+      spreadsheetParsingConfiguration({
+        SPREADSHEET_PARSE_TIMEOUT_MS: "1",
+      }).timeoutMs,
+    ).toBe(1_000);
+    expect(
+      spreadsheetParsingConfiguration({
+        SPREADSHEET_PARSE_TIMEOUT_MS: "999999",
+      }).timeoutMs,
+    ).toBe(10_000);
   });
 });
 

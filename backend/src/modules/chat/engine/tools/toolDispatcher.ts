@@ -284,6 +284,7 @@ export async function runToolCalls(
   courtlistenerState?: CourtlistenerTurnState,
   apiKeys?: import("../../../../lib/llm").UserApiKeys,
   nonce?: string,
+  signal?: AbortSignal,
 ): Promise<{
   toolResults: unknown[];
   docsRead: {
@@ -549,7 +550,7 @@ export async function runToolCalls(
         write,
         docIndex,
         db,
-        { readIdentity },
+        { readIdentity, signal },
       );
       const filename = docStore.get(docId)?.filename;
       const documentId = docIndex?.[docId]?.document_id;
@@ -620,6 +621,7 @@ export async function runToolCalls(
         docIndex,
         db,
         readIdentity,
+        signal,
       });
       const filename = docInfo?.filename;
       if (filename) {
@@ -686,7 +688,7 @@ export async function runToolCalls(
           write,
           docIndex,
           db,
-          { readIdentity },
+          { readIdentity, signal },
         );
         const filename = docStore.get(docId)?.filename ?? docId;
         if (readIdentity && turnReadState) {

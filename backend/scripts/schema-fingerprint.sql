@@ -17,17 +17,18 @@
 --   2. Determinism. Every query below has a total ORDER BY, so output never
 --      depends on OID assignment or object creation order.
 --
--- What "equivalent" means here — everything that affects behaviour or
--- security: tables, columns (type/null/default/identity), constraints,
--- indexes, row-level security + policies, functions (full definition),
--- triggers (including the auth.users signup trigger), views, enum types,
--- and object-level privileges (the ACLs that decide what anon,
--- authenticated, and service_role may do). ACLs are exploded to one row per
--- (object, grantee, privilege) because the raw acl array is ordered by
--- GRANT execution order, which differs between the two build paths.
+-- What "equivalent" means here — everything this application schema records
+-- that affects behavior or security: object owners, tables, columns
+-- (type/null/default/identity), constraints, indexes, row-level security +
+-- policies, functions (full definition and owner), triggers (including the
+-- auth.users signup trigger), views, enum types, schema/object privileges, and
+-- scoped default privileges. ACLs are exploded to one row per object,
+-- grantee, and privilege (including grantability) because raw ACL arrays are
+-- ordered by GRANT execution order, which differs between build paths.
 
 \echo === tables ===
 select 'table|' || c.relname || '|kind=' || c.relkind::text
+    || '|owner=' || pg_get_userbyid(c.relowner)
     || '|rls=' || c.relrowsecurity || '|forcerls=' || c.relforcerowsecurity
 from pg_class c
 join pg_namespace n on n.oid = c.relnamespace
@@ -78,6 +79,7 @@ order by 1;
 
 \echo === functions ===
 select 'function|' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')'
+    || '|owner=' || pg_get_userbyid(p.proowner)
     || E'\n' || pg_get_functiondef(p.oid)
 from pg_proc p
 join pg_namespace n on n.oid = p.pronamespace
@@ -104,7 +106,8 @@ where n.nspname = 'public' and c.relkind in ('v', 'm')
 order by 1;
 
 \echo === enum types ===
-select 'enum|' || t.typname || '|' || e.enumlabel || '|pos=' || e.enumsortorder
+select 'enum|' || t.typname || '|owner=' || pg_get_userbyid(t.typowner)
+    || '|' || e.enumlabel || '|pos=' || e.enumsortorder
 from pg_type t
 join pg_enum e on e.enumtypid = t.oid
 join pg_namespace n on n.oid = t.typnamespace
@@ -133,19 +136,34 @@ order by 1;
 \echo === function privileges ===
 select 'facl|' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')'
     || '|grantee=' || case when acl.grantee = 0 then 'PUBLIC' else pg_get_userbyid(acl.grantee) end
-    || '|' || acl.privilege_type
+    || '|' || acl.privilege_type || '|grantable=' || acl.is_grantable
 from pg_proc p
 join pg_namespace n on n.oid = p.pronamespace
 cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) acl
 where n.nspname = 'public'
 order by 1;
 
-\echo === default privileges ===
-select 'dacl|objtype=' || d.defaclobjtype::text
+\echo === schema privileges ===
+select 'schema_acl|' || n.nspname || '|owner=' || pg_get_userbyid(n.nspowner)
     || '|grantee=' || case when acl.grantee = 0 then 'PUBLIC' else pg_get_userbyid(acl.grantee) end
-    || '|' || acl.privilege_type
+    || '|' || acl.privilege_type || '|grantable=' || acl.is_grantable
+from pg_namespace n
+cross join lateral aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) acl
+where n.nspname = 'public'
+order by 1;
+
+\echo === default privileges ===
+select 'dacl|owner=' || pg_get_userbyid(d.defaclrole)
+    || '|scope=' || case when d.defaclnamespace = 0 then 'global' else n.nspname end
+    || '|objtype=' || d.defaclobjtype::text
+    || '|grantor=' || pg_get_userbyid(acl.grantor)
+    || '|grantee=' || case when acl.grantee = 0 then 'PUBLIC' else pg_get_userbyid(acl.grantee) end
+    || '|' || acl.privilege_type || '|grantable=' || acl.is_grantable
 from pg_default_acl d
-join pg_namespace n on n.oid = d.defaclnamespace
+left join pg_namespace n on n.oid = d.defaclnamespace
 cross join lateral aclexplode(d.defaclacl) acl
 where n.nspname = 'public'
+   or (d.defaclnamespace = 0
+       and d.defaclrole = 'postgres'::regrole
+       and d.defaclobjtype = 'f')
 order by 1;
