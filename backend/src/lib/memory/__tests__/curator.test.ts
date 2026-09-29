@@ -472,8 +472,40 @@ function services(
 }
 
 describe("scope-bound memory curator tool", () => {
+  it("does not disclose a captured private-project transcript after access is revoked", async () => {
+    const authorizeDisclosure = vi.fn(async () => false);
+    const svc = services();
+
+    await expect(
+      runMemoryCuratorScope(
+        { ...args("user"), authorizeDisclosure },
+        svc,
+      ),
+    ).resolves.toMatchObject({
+      outcome: "skipped",
+      reason: "access_revoked",
+    });
+
+    expect(authorizeDisclosure).toHaveBeenCalledOnce();
+    expect(svc.stream).not.toHaveBeenCalled();
+    expect(svc.write).not.toHaveBeenCalled();
+  });
+
+  it("does not disclose project memory to the provider after access is revoked", async () => {
+    const svc = services({
+      checkProject: vi.fn(async () => ({ ok: false as const, status: 404 })) as never,
+    });
+
+    const result = await runMemoryCuratorScope(args("project"), svc);
+
+    expect(result).toMatchObject({ outcome: "skipped", reason: "access_revoked" });
+    expect(svc.stream).not.toHaveBeenCalled();
+    expect(svc.write).not.toHaveBeenCalled();
+  });
+
   it("exposes only complete Markdown and writes to the server-bound scope", async () => {
     const svc = services();
+    const authorizeDisclosure = vi.fn(async () => true);
     svc.stream = vi.fn(async (params: StreamChatParams) => {
       await params.runTools?.([
         {
@@ -489,9 +521,13 @@ describe("scope-bound memory curator tool", () => {
       return { fullText: "" };
     });
 
-    const result = await runMemoryCuratorScope(args(), svc);
+    const result = await runMemoryCuratorScope(
+      { ...args(), authorizeDisclosure },
+      svc,
+    );
 
     expect(result).toEqual({ outcome: "updated", revision: 2 });
+    expect(authorizeDisclosure).toHaveBeenCalledOnce();
     expect(svc.stream).toHaveBeenCalledWith(
       expect.objectContaining({
         requireTools: true,
@@ -567,11 +603,7 @@ describe("scope-bound memory curator tool", () => {
       reason: "access_revoked",
     });
     expect(svc.write).not.toHaveBeenCalled();
-    const prompt = svc.stream.mock.calls[0]![0] as StreamChatParams;
-    expect(JSON.stringify(prompt.messages)).not.toContain(
-      "saved-personalisation",
-    );
-    expect(JSON.stringify(prompt.messages)).not.toContain("Alice Chen");
+    expect(svc.stream).not.toHaveBeenCalled();
   });
 
   it("hands a rejected body back to the model instead of failing the job", async () => {

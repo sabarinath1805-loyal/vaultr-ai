@@ -18,6 +18,7 @@ import {
 } from "../../lib/access";
 import type { Db } from "../../lib/supabase";
 import type { ParsedUploadSessionRequest } from "./uploads.manifest";
+import type { UploadSessionFile } from "./uploads.manifest";
 import {
   failure,
   internalFailure,
@@ -30,6 +31,17 @@ import {
  */
 const WORKFLOW_EDIT_FORBIDDEN =
   "You do not have permission to add documents to this workflow.";
+
+/** A user-delegated upload lost its destination authority before promotion. */
+export class UploadAuthorizationRevokedError extends Error {
+  readonly orphanedKeys: string[];
+
+  constructor(orphanedKeys: string[] = []) {
+    super("upload_destination_access_revoked");
+    this.name = "UploadAuthorizationRevokedError";
+    this.orphanedKeys = orphanedKeys.filter(Boolean);
+  }
+}
 
 export async function validateDestinationAccess(
   manifest: ParsedUploadSessionRequest,
@@ -222,4 +234,48 @@ export async function validateDestinationAccess(
     if (!asset) return failure(404, { detail: "Asset not found" });
   }
   return { ok: true };
+}
+
+/** Rebuild the server-owned destination view for a persisted session file. */
+export async function validatePersistedUploadDestination(
+  session: {
+    id: string;
+    user_id: string;
+    purpose: string;
+    destination: Record<string, unknown>;
+  },
+  file: UploadSessionFile,
+  userEmail: string | undefined,
+  db: Db,
+): Promise<UploadOutcome> {
+  const manifest = {
+    purpose: session.purpose,
+    destination: session.destination,
+    expected_total_bytes: file.expected_size_bytes,
+    files: [file],
+  } as ParsedUploadSessionRequest;
+  return validateDestinationAccess(manifest, session.user_id, userEmail, db);
+}
+
+/** Worker-facing, fail-closed boundary check for a persisted upload file. */
+export async function assertPersistedUploadDestination(
+  session: {
+    id: string;
+    user_id: string;
+    purpose: string;
+    destination: Record<string, unknown>;
+  },
+  file: UploadSessionFile,
+  userEmail: string | undefined,
+  db: Db,
+): Promise<void> {
+  const outcome = await validatePersistedUploadDestination(
+    session,
+    file,
+    userEmail,
+    db,
+  );
+  if (outcome.ok) return;
+  if (outcome.kind === "internal") throw outcome.error;
+  throw new UploadAuthorizationRevokedError();
 }

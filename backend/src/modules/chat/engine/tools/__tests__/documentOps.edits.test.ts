@@ -3,6 +3,7 @@ import { scriptedDb } from "../../../../../__tests__/helpers/scriptedDb";
 import type { Db } from "../../../../../lib/supabase";
 const mocks = vi.hoisted(() => ({
   active: vi.fn(),
+  deleteFilesBestEffort: vi.fn(),
   downloadFile: vi.fn(),
   uploadFile: vi.fn(),
   apply: vi.fn(),
@@ -12,6 +13,7 @@ vi.mock("../../../../../lib/documentVersions", () => ({
   contentSha256: () => "hash",
 }));
 vi.mock("../../../../../lib/storage", () => ({
+  deleteFilesBestEffort: mocks.deleteFilesBestEffort,
   downloadFile: mocks.downloadFile,
   uploadFile: mocks.uploadFile,
 }));
@@ -170,6 +172,42 @@ describe("assistant document-edit lifecycle", () => {
       error: "Failed to record document version.",
     });
     expect(fake.rpc).toHaveBeenCalledOnce();
+    fake.done();
+  });
+  it("does not upload an edited version when access is revoked before storage write", async () => {
+    const fake = newVersionDb();
+    let accessChecks = 0;
+
+    const result = await runEditDocument({
+      db: fake.db,
+      documentId: "doc",
+      userId: "actor",
+      edits: [],
+      authorize: async () => ++accessChecks < 3,
+    });
+
+    expect(result).toEqual({ ok: false, error: "Document not found." });
+    expect(mocks.downloadFile).toHaveBeenCalledOnce();
+    expect(mocks.uploadFile).not.toHaveBeenCalled();
+    expect(fake.rpc).not.toHaveBeenCalled();
+    expect(fake.calls.some((call) => call.table === "document_edits")).toBe(
+      false,
+    );
+  });
+  it("keeps an authorized edit available through its use-time checks", async () => {
+    const fake = newVersionDb();
+    const authorize = vi.fn(async () => true);
+
+    const result = await runEditDocument({
+      db: fake.db,
+      documentId: "doc",
+      userId: "actor",
+      edits: [],
+      authorize,
+    });
+
+    expect(result).toMatchObject({ ok: true, version_id: "version" });
+    expect(authorize.mock.calls.length).toBeGreaterThan(1);
     fake.done();
   });
   it("does not report success if the target was deleted before activation", async () => {

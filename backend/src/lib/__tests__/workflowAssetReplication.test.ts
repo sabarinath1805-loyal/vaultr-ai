@@ -42,8 +42,57 @@ function replicationDb(callOrder: string[] = []) {
             return { data: args.p_versions.map((row, index) => ({ ...row, id: `new-version-${index + 1}` })), error: null };
         }),
         from(table: string) {
+            const filters: Record<string, unknown> = {};
+            const accessQuery = {
+                select: () => accessQuery,
+                eq(column: string, value: unknown) {
+                    filters[column] = value;
+                    return accessQuery;
+                },
+                maybeSingle: async () => ({
+                    data:
+                        table === "documents" && filters.id === "asset-1"
+                            ? {
+                                  id: "asset-1",
+                                  user_id: null,
+                                  project_id: null,
+                                  org_id: null,
+                                  workflow_id: "workflow-1",
+                                  current_version_id: null,
+                              }
+                            : table === "workflows"
+                              ? {
+                                    id: filters.id,
+                                    user_id: "user-1",
+                                    org_id: null,
+                                }
+                              : table === "projects"
+                                ? {
+                                      id: filters.id,
+                                      user_id: "user-1",
+                                      org_id: null,
+                                  }
+                                : null,
+                    error: null,
+                }),
+                single: async () => ({
+                    data:
+                        table === "documents" && filters.id === "asset-1"
+                            ? {
+                                  id: "asset-1",
+                                  user_id: null,
+                                  project_id: null,
+                                  org_id: null,
+                                  workflow_id: "workflow-1",
+                                  current_version_id: null,
+                              }
+                            : null,
+                    error: null,
+                }),
+            };
             if (table === "documents") {
                 return {
+                    ...accessQuery,
                     insert(rows: Record<string, unknown>[]) {
                         callOrder.push("insert:documents");
                         documentRows.push(rows);
@@ -66,6 +115,7 @@ function replicationDb(callOrder: string[] = []) {
             }
             if (table === "document_versions") {
                 return {
+                    ...accessQuery,
                     insert(rows: Record<string, unknown>[]) {
                         callOrder.push("insert:document_versions");
                         versionRows.push(rows);
@@ -81,7 +131,7 @@ function replicationDb(callOrder: string[] = []) {
                     },
                 };
             }
-            throw new Error(`Unexpected table: ${table}`);
+            return accessQuery;
         },
     };
     return { db, documentRows, versionRows };
@@ -120,6 +170,7 @@ describe("workflow asset replication", () => {
                 },
             ],
         ]);
+        const { db } = replicationDb();
 
         const result = await runToolCalls(
             [
@@ -135,7 +186,7 @@ describe("workflow asset replication", () => {
             ],
             store,
             "user-1",
-            {} as never,
+            db as never,
             () => undefined,
             workflows,
             undefined,
@@ -168,7 +219,12 @@ describe("workflow asset replication", () => {
                 },
             ],
         ]);
-        const index: DocIndex = {};
+        const index: DocIndex = {
+            [sourceLabel]: {
+                document_id: "asset-1",
+                filename: "Precedent.pdf",
+            },
+        };
         const callOrder: string[] = [];
         uploadFile.mockImplementation((key: unknown) => {
             callOrder.push(`upload:${String(key)}`);
@@ -260,6 +316,12 @@ describe("workflow asset replication", () => {
         ]);
         uploadFile.mockRejectedValue(new Error("bucket unavailable"));
         const { db, documentRows, versionRows } = replicationDb();
+        const index: DocIndex = {
+            [sourceLabel]: {
+                document_id: "asset-1",
+                filename: "Precedent.pdf",
+            },
+        };
 
         const result = await runToolCalls(
             [
@@ -280,7 +342,7 @@ describe("workflow asset replication", () => {
             () => undefined,
             undefined,
             undefined,
-            {},
+            index,
         );
 
         expect(documentRows).toHaveLength(0);
@@ -305,6 +367,12 @@ describe("workflow asset replication", () => {
             ],
         ]);
         const { db, documentRows } = replicationDb();
+        const index: DocIndex = {
+            [sourceLabel]: {
+                document_id: "asset-1",
+                filename: "Precedent.pdf",
+            },
+        };
 
         const result = await runToolCalls(
             [
@@ -325,7 +393,7 @@ describe("workflow asset replication", () => {
             () => undefined,
             undefined,
             undefined,
-            {},
+            index,
             undefined,
             undefined,
             "project-1",

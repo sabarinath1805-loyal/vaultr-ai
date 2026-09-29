@@ -26,7 +26,12 @@
 
 import { type UserApiKeys } from "../../lib/llm";
 import { queryTabularAllColumns } from "./tabular.extract";
-import { loadRowDocumentText, type ReviewRow } from "./tabular.rows";
+import {
+    loadRowDocumentText,
+    type ReviewRow,
+    type SourceDocument,
+} from "./tabular.rows";
+import { TabularAccessRevokedError } from "./tabular.authorization";
 import { type CellResult, type Column, type Db } from "./tabular.shared";
 
 /**
@@ -109,6 +114,8 @@ export async function extractRowColumns(args: {
     sink: CellSink;
     /** Generation this run belongs to; stamps and guards every cell write. */
     generationId?: string | null;
+    /** Recheck review authority at source, provider, and cell-write boundaries. */
+    authorize?: (source?: SourceDocument | string) => Promise<void>;
     /** Stops the run (client disconnect, or lease lost). */
     abortSignal?: AbortSignal;
 }): Promise<ExtractRowResult> {
@@ -123,6 +130,7 @@ export async function extractRowColumns(args: {
         sink,
         generationId,
         abortSignal,
+        authorize,
     } = args;
 
     const processed = columns.filter((col) => {
@@ -141,8 +149,23 @@ export async function extractRowColumns(args: {
     // prefixed with its source document id so citations can name it). Loaded
     // before anything is marked "generating" so a run stopped during the (slow)
     // download leaves the grid exactly as it found it.
-    const markdown = await loadRowDocumentText(db, row);
+    await authorize?.();
+    const sourceDocuments = new Map<string, SourceDocument>();
+    const markdown = await loadRowDocumentText(db, row, {
+        authorizeDocument: async (document) => {
+            await authorize?.(document);
+            if (typeof document !== "string") {
+                sourceDocuments.set(document.id, document);
+            }
+        },
+    });
     if (abortSignal?.aborted) return untouched();
+    const authorizeSourceContent = async () => {
+        await authorize?.();
+        for (const document of sourceDocuments.values()) {
+            await authorize?.(document);
+        }
+    };
 
     // Mark each outstanding column "generating" (insert the cell if it's new)
     // and announce it, so the grid shows spinners immediately.
@@ -158,6 +181,7 @@ export async function extractRowColumns(args: {
     // for a run that still owns its cells this matches, and for one that has
     // been superseded it matches nothing.
     for (const col of processed) {
+        await authorizeSourceContent();
         await sink.generating(row.id, col.index);
         const existing = existingByColumn.get(col.index);
         if (existing?.id) {
@@ -188,12 +212,14 @@ export async function extractRowColumns(args: {
     const received = new Set<number>();
     let error: unknown;
     try {
+        await authorizeSourceContent();
         await queryTabularAllColumns(
             model,
             row.label,
             markdown,
             processed,
             async (columnIndex, result) => {
+                await authorizeSourceContent();
                 received.add(columnIndex);
                 const query = db
                     .from("tabular_cells")
@@ -214,6 +240,7 @@ export async function extractRowColumns(args: {
             abortSignal,
         );
     } catch (err) {
+        if (err instanceof TabularAccessRevokedError) throw err;
         error = err;
         // An abort re-thrown by the stream is the caller stopping us, not a
         // failure worth logging; the unreturned columns are reported below.

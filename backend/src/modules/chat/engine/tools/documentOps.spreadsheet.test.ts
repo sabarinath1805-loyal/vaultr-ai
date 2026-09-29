@@ -46,16 +46,50 @@ function readCall(docId: string): ToolCall[] {
   ];
 }
 
+function authorizedDocumentDb(docId: string) {
+  const document = {
+    id: docId,
+    user_id: "user-a",
+    project_id: null,
+    org_id: null,
+    workflow_id: null,
+    current_version_id: null,
+  };
+  function from(table: string) {
+    const filters: Record<string, unknown> = {};
+    const query = {
+      select: () => query,
+      eq: (column: string, value: unknown) => {
+        filters[column] = value;
+        return query;
+      },
+      maybeSingle: async () => ({
+        data: table === "documents" && filters.id === docId ? document : null,
+        error: null,
+      }),
+      single: async () => ({
+        data: table === "documents" && filters.id === docId ? document : null,
+        error: null,
+      }),
+    };
+    return query;
+  }
+  return { from };
+}
+
 async function runReadDocument(docId: string, store: DocStore) {
+  const db = authorizedDocumentDb(docId);
   return runToolCalls(
     readCall(docId),
     store,
     "user-a",
-    {} as never,
+    db as never,
     () => undefined,
     undefined,
     undefined,
-    undefined,
+    {
+      [docId]: { document_id: docId, filename: "Budget.xlsx" },
+    },
     undefined,
     undefined,
     undefined,
@@ -88,7 +122,7 @@ describe("read_document spreadsheet parser boundary", () => {
     expect(result.docsRead).toEqual([
       {
         filename: "Budget.xlsx",
-        document_id: undefined,
+        document_id: "doc-0",
         version_id: null,
         version_number: null,
       },
@@ -110,7 +144,7 @@ describe("read_document spreadsheet parser boundary", () => {
     mocks.downloadFile.mockClear();
     const denied = await runReadDocument("foreign-document-id", store);
     expect((denied.toolResults[0] as { content: string }).content).toContain(
-      "Document not found.",
+      "This resource is no longer available.",
     );
     expect(mocks.downloadFile).not.toHaveBeenCalled();
   }, 10_000);

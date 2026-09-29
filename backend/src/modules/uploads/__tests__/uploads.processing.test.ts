@@ -12,6 +12,10 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
 import { UPLOAD_URL_TTL_SECONDS } from "../uploads.manifest";
+import {
+  assertPersistedUploadDestination,
+  UploadAuthorizationRevokedError,
+} from "../uploads.access";
 
 const mocks = vi.hoisted(() => ({
   deleteFile: vi.fn(),
@@ -25,6 +29,12 @@ const mocks = vi.hoisted(() => ({
   enqueueDbJob: vi.fn(),
   requestDocumentCleanupDelivery: vi.fn(),
   reportError: vi.fn((_error: unknown, _context?: unknown) => null),
+  checkProjectAccess: vi.fn(),
+}));
+
+vi.mock("../../../lib/access", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../lib/access")>()),
+  checkProjectAccess: mocks.checkProjectAccess,
 }));
 
 vi.mock("../../../lib/observability/sentry", async (importOriginal) => ({
@@ -70,6 +80,7 @@ vi.mock("../../../lib/supabase", () => ({
 import {
   cleanupUploadProcessingTempFiles,
   cleanupUploadSessions,
+  uploadAlreadyAccepted,
   processUploadFile,
   processUploadJob,
   startUploadProcessingWorkers,
@@ -134,6 +145,14 @@ function fakeDb(singleResults: Record<string, QueryResult[]> = {}) {
 
   return {
     from: vi.fn((table: string) => new Query(table)),
+    auth: {
+      admin: {
+        getUserById: vi.fn(async () => ({
+          data: { user: { email: baseSession.user_email } },
+          error: null,
+        })),
+      },
+    },
     rpc: vi.fn(async (name: string, args: { p_version?: Record<string, unknown> }): Promise<QueryResult> => name === "create_document_version"
       ? { data: { ...args.p_version, version_number: args.p_version?.version_number ?? 3 }, error: null }
       : { data: "processing", error: null }),
@@ -221,6 +240,14 @@ function scriptedDb(results: QueryResult[]) {
 
   return {
     from: vi.fn((table: string) => new Query(table)),
+    auth: {
+      admin: {
+        getUserById: vi.fn(async () => ({
+          data: { user: { email: baseSession.user_email } },
+          error: null,
+        })),
+      },
+    },
     rpc: vi.fn(async (name: string, args: { p_version?: Record<string, unknown> }): Promise<QueryResult> => name === "create_document_version"
       ? { data: { ...args.p_version, version_number: args.p_version?.version_number ?? 3 }, error: null }
       : { data: "processing", error: null }),
@@ -238,6 +265,7 @@ const baseFile = {
   file_type: "pdf",
   content_type: "application/pdf",
   expected_size_bytes: 4,
+  staging_storage_path: "upload-sessions/user/session/file/staging",
   sealed_storage_path: "upload-sessions/user/session/file/sealed",
   target_folder_id: null,
   status: "uploaded",
@@ -260,6 +288,8 @@ const baseSession = {
   status: "processing",
 };
 
+const allowPromotion = async () => undefined;
+
 describe("upload processing", () => {
   let processingTempRoot: string;
 
@@ -278,6 +308,7 @@ describe("upload processing", () => {
     mocks.enqueueStorageCleanup.mockResolvedValue(undefined);
     mocks.enqueueDbJob.mockResolvedValue({ id: "cleanup-job", deduped: false });
     mocks.requestDocumentCleanupDelivery.mockResolvedValue(0);
+    mocks.checkProjectAccess.mockResolvedValue({ ok: false });
   });
 
   afterEach(async () => {
@@ -295,7 +326,7 @@ describe("upload processing", () => {
     };
     const db = fakeDb({ documents: [{ data: document, error: null }] });
 
-    const result = await processUploadFile(db as never, baseSession, baseFile);
+    const result = await processUploadFile(db as never, baseSession, baseFile, allowPromotion);
 
     expect(mocks.createFileReadStream).toHaveBeenCalledWith(
       baseFile.sealed_storage_path,
@@ -321,6 +352,114 @@ describe("upload processing", () => {
     });
   });
 
+  it("does not promote a still-valid signed upload into a project after access is revoked", async () => {
+    const revokedProjectSession = {
+      ...baseSession,
+      destination: { scope: "project", project_id: "project-1" },
+    };
+    const db = fakeDb({
+      projects: [{ data: { id: "project-1", org_id: null }, error: null }],
+    });
+
+    await expect(
+      processUploadFile(db as never, revokedProjectSession, baseFile, () =>
+        assertPersistedUploadDestination(
+          revokedProjectSession,
+          baseFile,
+          baseSession.user_email ?? undefined,
+          db as never,
+        ),
+      ),
+    ).rejects.toBeInstanceOf(UploadAuthorizationRevokedError);
+
+    expect(mocks.checkProjectAccess).toHaveBeenCalledWith(
+      "project-1",
+      baseSession.user_id,
+      baseSession.user_email,
+      db,
+    );
+    expect(mocks.createFileReadStream).not.toHaveBeenCalled();
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+    expect(db.from).not.toHaveBeenCalledWith("documents");
+  });
+
+  it("recognizes a created destination row as accepted if its marker write failed", async () => {
+    const acceptedSession = {
+      ...baseSession,
+      destination: { scope: "project", project_id: "project-1" },
+    };
+    const db = fakeDb({
+      documents: [{ data: { id: baseFile.resource_id }, error: null }],
+    });
+
+    await expect(
+      uploadAlreadyAccepted(db as never, acceptedSession, baseFile as never),
+    ).resolves.toBe(true);
+    expect(db.from).toHaveBeenCalledWith("documents");
+  });
+
+  it("terminates a queued project upload after revocation without promoting or retrying it", async () => {
+    const revokedSession = {
+      ...baseSession,
+      destination: { scope: "project", project_id: "project-1" },
+    };
+    const db = scriptedDb([
+      {
+        data: {
+          id: "job-1",
+          session_id: revokedSession.id,
+          file_id: baseFile.id,
+          attempts: 1,
+          locked_by: "worker-1",
+        },
+        error: null,
+      },
+      { data: revokedSession, error: null },
+      { data: baseFile, error: null },
+      { data: { id: "job-1" }, error: null }, // initial lease heartbeat
+      { error: null }, // processing status
+      { data: null, error: null }, // no destination row: still unaccepted
+      { data: { id: "job-1" }, error: null }, // catch-path heartbeat
+      { error: null }, // terminal file status
+      { error: null }, // mark the unaccepted create row failed (no-op)
+      { data: { id: "job-1" }, error: null }, // terminal-path heartbeat
+      { error: null }, // failed create cleanup
+      { data: [], error: null }, // no failed sealed paths remain
+      { data: { id: "job-1" }, error: null }, // finish job
+    ]);
+
+    await processUploadJob(db as never, "job-1", "worker-1");
+
+    expect(mocks.createFileReadStream).not.toHaveBeenCalled();
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+    expect(mocks.enqueueStorageCleanup).not.toHaveBeenCalled();
+    expect(db.calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          table: "upload_session_files",
+          operation: "update",
+          payload: expect.objectContaining({
+            status: "error",
+            error_code: "authorization_revoked",
+          }),
+        }),
+        expect.objectContaining({
+          table: "upload_processing_jobs",
+          operation: "update",
+          payload: expect.objectContaining({ status: "completed" }),
+        }),
+      ]),
+    );
+    expect(
+      db.calls.some(
+        (call) =>
+          call.table === "upload_processing_jobs" &&
+          (call.payload as { status?: string } | undefined)?.status === "queued",
+      ),
+    ).toBe(false);
+    expect(db.remaining).toHaveLength(0);
+  });
+
   it("converts Office files from temporary paths and streams the PDF upload", async () => {
     const officeFile = {
       ...baseFile,
@@ -344,7 +483,7 @@ describe("upload processing", () => {
       },
     );
 
-    await processUploadFile(db as never, baseSession, officeFile);
+    await processUploadFile(db as never, baseSession, officeFile, allowPromotion);
 
     expect(mocks.officeFileToPdf).toHaveBeenCalledOnce();
     expect(mocks.uploadFileFromPath).toHaveBeenCalledWith(
@@ -377,7 +516,7 @@ describe("upload processing", () => {
     );
     vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const result = await processUploadFile(db as never, baseSession, officeFile);
+    const result = await processUploadFile(db as never, baseSession, officeFile, allowPromotion);
 
     expect(result).toMatchObject({ id: officeFile.resource_id });
     expect(mocks.uploadFileFromPath).not.toHaveBeenCalled();
@@ -413,6 +552,7 @@ describe("upload processing", () => {
         destination: { scope: "workflow", workflow_id: asset.workflow_id },
       },
       baseFile,
+      allowPromotion,
     );
 
     expect(db.from).toHaveBeenCalledWith("documents");
@@ -450,6 +590,7 @@ describe("upload processing", () => {
         },
       },
       baseFile,
+      allowPromotion,
     );
 
     expect(result).toMatchObject(createdVersion);
@@ -495,6 +636,7 @@ describe("upload processing", () => {
         },
       },
       { ...baseFile, filename: "replacement.pdf" },
+      allowPromotion,
     );
 
     expect(result).toEqual(updatedVersion);
@@ -507,7 +649,7 @@ describe("upload processing", () => {
     );
 
     await expect(
-      processUploadFile(fakeDb() as never, baseSession, baseFile),
+      processUploadFile(fakeDb() as never, baseSession, baseFile, allowPromotion),
     ).rejects.toThrow("sealed_upload_size_mismatch");
     expect(mocks.uploadFileFromPath).not.toHaveBeenCalled();
   });
@@ -519,7 +661,7 @@ describe("upload processing", () => {
     const db = scriptedDb([{ data: null, error: null }]);
 
     await expect(
-      processUploadFile(db as never, baseSession, createdFile),
+      processUploadFile(db as never, baseSession, createdFile, allowPromotion),
     ).rejects.toThrow(/document_deleted/);
 
     expect(db.calls.some((call) => call.operation === "upsert")).toBe(false);
@@ -536,7 +678,7 @@ describe("upload processing", () => {
     } as never);
 
     await expect(
-      processUploadFile(db as never, baseSession, baseFile),
+      processUploadFile(db as never, baseSession, baseFile, allowPromotion),
     ).rejects.toThrow(/document_deleted/);
   });
 
@@ -559,7 +701,7 @@ describe("upload processing", () => {
     const result = await processUploadFile(db as never, baseSession, {
       ...baseFile,
       document_created_at: null,
-    });
+    }, allowPromotion);
 
     expect(result).toMatchObject({ id: baseFile.resource_id });
     // The row was written, and the marker recorded so the NEXT retry checks
@@ -576,7 +718,7 @@ describe("upload processing", () => {
     ]);
 
     await expect(
-      processUploadFile(db as never, baseSession, baseFile),
+      processUploadFile(db as never, baseSession, baseFile, allowPromotion),
     ).rejects.toMatchObject({ code: "57P01" });
 
     const stamped = db.calls.some(
@@ -611,6 +753,7 @@ describe("upload processing", () => {
       { data: baseFile, error: null },
       { data: { id: "job-1" }, error: null },
       { error: null },
+      { data: null, error: null }, // no destination row: still unaccepted
       { data: { id: "job-1" }, error: null },
       { error: null },
       { error: null },
@@ -729,6 +872,24 @@ describe("upload processing", () => {
       { data: replacementFile, error: null },
       { data: { id: "job-1" }, error: null },
       { error: null },
+      {
+        data: { storage_path: "documents/old/replacement.pdf" },
+        error: null,
+      },
+      {
+        data: {
+          id: documentId,
+          user_id: replacementSession.user_id,
+          project_id: null,
+          org_id: null,
+          workflow_id: null,
+        },
+        error: null,
+      },
+      {
+        data: { id: versionId, file_type: "pdf", deleted_at: null },
+        error: null,
+      },
       { data: null, error: { code: "PGRST116", message: "no rows" } },
       { data: { id: "job-1" }, error: null },
       { error: null },

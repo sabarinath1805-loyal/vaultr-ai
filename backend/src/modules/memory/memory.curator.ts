@@ -675,9 +675,37 @@ export async function runMemoryCuratorScope(
     conversationId: string;
     turnId: string | null;
     jobId: string;
+    /** Revalidate the source conversation immediately before provider disclosure. */
+    authorizeDisclosure?: () => Promise<boolean>;
   },
   services: CuratorScopeServices = defaultCuratorScopeServices,
 ): Promise<CuratorScopeOutcome> {
+  if (args.file.scope === "project") {
+    const projectId = args.file.project_id;
+    const access = projectId
+      ? await services.checkProject(
+          projectId,
+          args.actorUserId,
+          args.actorEmail,
+          args.db,
+        )
+      : { ok: false as const };
+    if (!access.ok || !can(access.projectRole, "content.edit")) {
+      return {
+        outcome: "skipped",
+        revision: args.current.revision,
+        reason: "access_revoked",
+      };
+    }
+  }
+  if (args.authorizeDisclosure && !(await args.authorizeDisclosure())) {
+    return {
+      outcome: "skipped",
+      revision: args.current.revision,
+      reason: "access_revoked",
+    };
+  }
+
   const scopePolicy =
     args.file.scope === "user"
       ? `This is app-wide memory for one user. Keep only durable, cross-project user facts, explicit preferences, recurring working conventions, and stable personal context directly supported by that user's words. Never copy project-specific or client-confidential matter facts into app memory. Personalisation is the sole source of truth for profile facts: never add or preserve the user's display name, organisation, jurisdiction, practice setting, professional title, or practice areas in memory.md. The saved-personalisation input, when present, lists authoritative values that must be excluded. Existing memory containing any such profile fact should be changed to remove it even when no new memory is added. Never infer missing Personalisation fields from the transcript.`
@@ -883,6 +911,134 @@ export async function runMemoryCuratorScope(
     };
   }
   return { outcome: "no_change", revision: args.current.revision };
+}
+
+/**
+ * Revalidate the exact conversation source and audience before sending its
+ * captured transcript to the curator provider. App memory may use a private
+ * project conversation, so checking only project-memory writes is not enough.
+ */
+export async function authorizeMemoryDisclosure(args: {
+  db: Db;
+  state: ConsolidationState;
+  actorEmail: string | null;
+  expectedProjectId: string | null;
+  scope: MemoryScope;
+}): Promise<boolean> {
+  const { db, state, actorEmail, expectedProjectId, scope } = args;
+  if ((state.project_id ?? null) !== expectedProjectId) return false;
+
+  let resourceId: string;
+  let projectId: string | null;
+  if (state.surface === "chat") {
+    const { data, error } = await db
+      .from("chats")
+      .select("id, user_id, project_id, org_id")
+      .eq("id", state.conversation_id)
+      .maybeSingle();
+    if (error) throw new Error("Memory curator could not revalidate chat access");
+    if (!data || (data.project_id ?? null) !== expectedProjectId) return false;
+    const chat = data as {
+      id: string;
+      user_id: string | null;
+      project_id: string | null;
+      org_id?: string | null;
+    };
+    const access = await ensureChatAccess(
+      chat,
+      state.actor_user_id,
+      actorEmail,
+      db,
+    );
+    if (!access.ok) return false;
+    resourceId = chat.id;
+    projectId = chat.project_id;
+    if (scope === "user") {
+      if (
+        chat.user_id !== state.actor_user_id ||
+        chat.org_id ||
+        (await hasDirectContentGrants(db, "chat", chat.id))
+      ) {
+        return false;
+      }
+    }
+  } else if (state.surface === "tabular") {
+    const { data: chat, error: chatError } = await db
+      .from("tabular_review_chats")
+      .select("id, review_id")
+      .eq("id", state.conversation_id)
+      .maybeSingle();
+    if (chatError) throw new Error("Memory curator could not revalidate review chat");
+    if (!chat) return false;
+    const { data, error } = await db
+      .from("tabular_reviews")
+      .select("id, user_id, project_id, org_id")
+      .eq("id", chat.review_id as string)
+      .maybeSingle();
+    if (error) throw new Error("Memory curator could not revalidate review access");
+    if (!data || (data.project_id ?? null) !== expectedProjectId) return false;
+    const review = data as {
+      id: string;
+      user_id: string | null;
+      project_id: string | null;
+      org_id?: string | null;
+    };
+    const access = await ensureReviewAccess(
+      review,
+      state.actor_user_id,
+      actorEmail,
+      db,
+    );
+    if (!access.ok) return false;
+    resourceId = review.id;
+    projectId = review.project_id;
+    if (scope === "user") {
+      if (
+        !projectId ||
+        review.user_id !== state.actor_user_id ||
+        review.org_id ||
+        (await hasDirectContentGrants(db, "tabular_review", review.id))
+      ) {
+        return false;
+      }
+    }
+  } else {
+    const { data, error } = await db
+      .from("word_chats")
+      .select("id, user_id")
+      .eq("id", state.conversation_id)
+      .maybeSingle();
+    if (error) throw new Error("Memory curator could not revalidate Word chat access");
+    if (!data || data.user_id !== state.actor_user_id || scope !== "user") {
+      return false;
+    }
+    resourceId = state.conversation_id;
+    projectId = null;
+  }
+
+  if (scope === "project") {
+    if (!projectId) return false;
+    const access = await checkProjectAccess(
+      projectId,
+      state.actor_user_id,
+      actorEmail,
+      db,
+    );
+    return access.ok && can(access.projectRole, "content.edit");
+  }
+
+  if (projectId) {
+    const access = await checkProjectAccess(
+      projectId,
+      state.actor_user_id,
+      actorEmail,
+      db,
+    );
+    if (!access.ok || (await projectHasSharedAudience(db, projectId, access.project.org_id))) {
+      return false;
+    }
+  }
+  return !!resourceId;
 }
 
 async function setStatus(args: {
@@ -1174,9 +1330,18 @@ export async function handleMemoryConsolidation(
     expectedEpoch: number;
     sourceEpoch: number;
     turnId: string | null;
+    authorizeDisclosure: () => Promise<boolean>;
   }> = [];
   const outcomes: Record<string, string> = {};
   if (conversation) {
+    const authorizeDisclosure = (scope: MemoryScope) =>
+      authorizeMemoryDisclosure({
+        db,
+        state,
+        actorEmail: conversation.actorEmail,
+        expectedProjectId: conversation.projectId,
+        scope,
+      });
     const appEpoch = payloadEpoch(job, "appEpoch");
     const sourceEpoch = payloadEpoch(job, "sourceEpoch");
     const terminalAt = payloadString(job, "terminalAt") ?? undefined;
@@ -1207,6 +1372,7 @@ export async function handleMemoryConsolidation(
         expectedEpoch: appEpoch,
         sourceEpoch,
         turnId: terminalTurnId,
+        authorizeDisclosure: () => authorizeDisclosure("user"),
       });
     } else if (
       appEpoch != null &&
@@ -1253,6 +1419,7 @@ export async function handleMemoryConsolidation(
           expectedEpoch: projectEpoch,
           sourceEpoch,
           turnId: payloadString(job, "projectTurnId") ?? terminalTurnId,
+          authorizeDisclosure: () => authorizeDisclosure("project"),
         });
       } else if (
         projectEpoch != null &&
@@ -1308,6 +1475,25 @@ export async function handleMemoryConsolidation(
       continue;
     }
     try {
+      if (candidate.file.scope === "project") {
+        const access = await checkProjectAccess(
+          candidate.ownerId,
+          state.actor_user_id,
+          conversation.actorEmail,
+          db,
+        );
+        if (!access.ok || !can(access.projectRole, "content.edit")) {
+          await recordResult({
+            db,
+            jobId: job.id,
+            file: candidate.file,
+            outcome: "skipped",
+            revision: numeric(candidate.file.revision),
+          });
+          outcomes.project = "access_revoked";
+          continue;
+        }
+      }
       const { current, file } = await getMemoryCurrent(
         db,
         candidate.file.scope,
@@ -1345,6 +1531,7 @@ export async function handleMemoryConsolidation(
         conversationId: state.conversation_id,
         turnId: candidate.turnId,
         jobId: job.id,
+        authorizeDisclosure: candidate.authorizeDisclosure,
       });
       await recordResult({
         db,

@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { streamChatWithTools, buildMemoryTurn } = vi.hoisted(() => ({
+const { streamChatWithTools, buildMemoryTurn, authorizeCurrentTurnContext } = vi.hoisted(() => ({
   streamChatWithTools: vi.fn(async (_params: StreamChatCall) => ({
     fullText: "",
   })),
+  authorizeCurrentTurnContext: vi.fn(async (..._args: unknown[]) => true),
   buildMemoryTurn: vi.fn(async (args: { systemPrompt: string }) => ({
     message: null as { role: string; content: string } | null,
     systemPrompt: args.systemPrompt,
@@ -21,6 +22,12 @@ vi.mock("../../../../lib/mcpConnectors", () => ({
 
 vi.mock("../../../../lib/memory/prompt", () => ({
   buildMemoryTurn: (args: { systemPrompt: string }) => buildMemoryTurn(args),
+}));
+
+vi.mock("../tools/toolDispatcher", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tools/toolDispatcher")>()),
+  authorizeCurrentTurnContext: (...args: unknown[]) =>
+    authorizeCurrentTurnContext(...args),
 }));
 
 import { runLLMStream, type ClientToolsAdapter } from "../streaming";
@@ -62,6 +69,7 @@ function baseParams() {
 beforeEach(() => {
   vi.clearAllMocks();
   streamChatWithTools.mockResolvedValue({ fullText: "" });
+  authorizeCurrentTurnContext.mockResolvedValue(true);
   buildMemoryTurn.mockImplementation(async (args: { systemPrompt: string }) => ({
     message: null as { role: string; content: string } | null,
     systemPrompt: args.systemPrompt,

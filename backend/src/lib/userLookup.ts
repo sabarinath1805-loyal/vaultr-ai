@@ -25,6 +25,16 @@ export function profileAttributionName(
     );
 }
 
+/** Resolve the provider-authenticated email for a queued actor at execution. */
+export async function currentAuthUserEmail(
+    db: Db,
+    userId: string,
+): Promise<string | null> {
+    const { data, error } = await db.auth.admin.getUserById(userId);
+    if (error) throw new Error("Could not resolve the current user identity");
+    return normalizeEmail(data.user?.email) || null;
+}
+
 export async function loadProfileUsersByEmail(db: Db) {
     const { data, error } = await db
         .from("user_profiles")

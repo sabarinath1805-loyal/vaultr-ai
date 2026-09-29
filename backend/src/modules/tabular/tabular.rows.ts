@@ -27,6 +27,9 @@ export type SourceDocument = {
     id: string;
     filename: string;
     file_type: string | null;
+    user_id?: string | null;
+    org_id?: string | null;
+    workflow_id?: string | null;
     current_version_id?: string | null;
     project_id?: string | null;
     folder_id?: string | null;
@@ -41,7 +44,7 @@ export async function fetchSourceDocuments(
     const { data, error } = await db
         .from("documents")
         .select(
-            "id, current_version_id, project_id, folder_id, library_folder_id",
+            "id, user_id, org_id, workflow_id, current_version_id, project_id, folder_id, library_folder_id",
         )
         .in("id", documentIds);
     if (error) throw new Error(error.message);
@@ -108,12 +111,23 @@ export async function loadReviewRow(
 export async function loadRowDocumentText(
     db: Db,
     row: ReviewRow,
+    options: {
+        authorizeDocument?: (document: SourceDocument | string) => Promise<void>;
+    } = {},
 ): Promise<string> {
     const sourceIds =
         row.source_document_ids ?? (row.document_id ? [row.document_id] : []);
+    // A queued review can outlive the grant that allowed it to be prepared.
+    // Check each persisted source ID before loading filenames/version metadata,
+    // then check the resolved row again immediately before any bytes or
+    // metadata are returned to the extraction caller.
+    for (const sourceId of sourceIds) {
+        await options.authorizeDocument?.(sourceId);
+    }
     const docs = await fetchSourceDocuments(db, sourceIds);
     const sections: string[] = [];
     for (const doc of docs) {
+        await options.authorizeDocument?.(doc);
         const storagePath = (doc as SourceDocument & { storage_path?: string })
             .storage_path;
         let markdown = "";

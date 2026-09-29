@@ -11,7 +11,8 @@ vi.mock("../tabular.rows", () => ({
 }));
 
 import { extractRowColumns } from "../tabular.extractRow";
-import type { ReviewRow } from "../tabular.rows";
+import { TabularAccessRevokedError } from "../tabular.authorization";
+import type { ReviewRow, SourceDocument } from "../tabular.rows";
 
 type Call = {
     table: string;
@@ -78,6 +79,69 @@ beforeEach(() => {
 });
 
 describe("extractRowColumns", () => {
+    it("rechecks current authority before reading sources or disclosing them to the model", async () => {
+        const revoked = new Error("access_revoked");
+        const authorize = vi.fn(async () => { throw revoked; });
+
+        await expect(
+            extractRowColumns({
+                db: makeDb() as never,
+                reviewId: "rev-1",
+                row: ROW,
+                columns: COLUMNS,
+                existingByColumn: new Map(),
+                model: "m",
+                apiKeys: {},
+                sink: sinkSpy(),
+                authorize,
+            }),
+        ).rejects.toBe(revoked);
+
+        expect(authorize).toHaveBeenCalledOnce();
+        expect(loadRowDocumentText).not.toHaveBeenCalled();
+        expect(queryTabularAllColumns).not.toHaveBeenCalled();
+    });
+
+    it("does not disclose text to the model if source authority is revoked after download", async () => {
+        const source: SourceDocument = {
+            id: "doc-1",
+            filename: "Contract.pdf",
+            file_type: "pdf",
+            user_id: "owner-1",
+            project_id: "project-1",
+        };
+        loadRowDocumentText.mockImplementation(
+            async (_db, _row, options: { authorizeDocument?: (doc: SourceDocument | string) => Promise<void> }) => {
+                await options.authorizeDocument?.(source);
+                return "confidential contract text";
+            },
+        );
+        let sourceChecks = 0;
+        const revoked = new TabularAccessRevokedError();
+        const authorize = vi.fn(async (document?: SourceDocument | string) => {
+            if (document && ++sourceChecks === 2) throw revoked;
+        });
+        const sink = sinkSpy();
+
+        await expect(
+            extractRowColumns({
+                db: makeDb() as never,
+                reviewId: "rev-1",
+                row: ROW,
+                columns: COLUMNS.slice(0, 1),
+                existingByColumn: new Map(),
+                model: "m",
+                apiKeys: {},
+                sink,
+                authorize,
+            }),
+        ).rejects.toBe(revoked);
+
+        expect(sourceChecks).toBe(2);
+        expect(sink.generating).not.toHaveBeenCalled();
+        expect(queryTabularAllColumns).not.toHaveBeenCalled();
+    });
+
     it("processes all columns, persists done, and reports none missing", async () => {
         queryTabularAllColumns.mockImplementation(
             async (_m, _f, _t, cols, onResult) => {

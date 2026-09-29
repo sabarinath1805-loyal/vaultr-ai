@@ -44,6 +44,7 @@ import {
 import { sendInternalError } from "../../lib/httpError";
 import {
     insertAssistantMessage,
+    hasCurrentProjectChatWriteAccess,
     prepareProjectChatStream,
     updateChatTitle,
 } from "./projectChat.service";
@@ -150,6 +151,13 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
     let chatTitle = prep.prepared.chatTitle;
     let completedTurnPersisted = prep.prepared.completedTurnPersisted;
     let memoryTurnScheduled = false;
+    const hasCurrentWriteAccess = () =>
+        hasCurrentProjectChatWriteAccess(db, {
+            chatId,
+            projectId,
+            userId,
+            userEmail,
+        });
 
     try {
         // The same SSE setup the chat and word-chat routes use: headers,
@@ -187,24 +195,26 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                       .join("\n")
                 : "";
             titlePromise = shouldGenerateTitle
-                ? generateAssistantChatTitle({
-                      model: titleModelForChat(selectedModel, titleModel),
-                      message: titleMessage,
-                      apiKeys,
-                  })
-                      .then(async (title) => {
-                          const saved = await updateChatTitle(db, {
-                              chatId,
-                              title,
-                          });
-                          if (!saved.ok) throw saved.error;
-                          chatTitle = title;
-                          if (!stream.signal.aborted) {
-                              write(
-                                  `data: ${JSON.stringify({ type: "chat_title", chatId, title })}\n\n`,
-                              );
-                          }
-                      })
+                ? (async () => {
+                      if (!(await hasCurrentWriteAccess())) return;
+                      const title = await generateAssistantChatTitle({
+                          model: titleModelForChat(selectedModel, titleModel),
+                          message: titleMessage,
+                          apiKeys,
+                      });
+                      if (!(await hasCurrentWriteAccess())) return;
+                      const saved = await updateChatTitle(db, {
+                          chatId,
+                          title,
+                      });
+                      if (!saved.ok) throw saved.error;
+                      chatTitle = title;
+                      if (!stream.signal.aborted) {
+                          write(
+                              `data: ${JSON.stringify({ type: "chat_title", chatId, title })}\n\n`,
+                          );
+                      }
+                  })()
                       .catch((error) => {
                           // Decided once the reply has settled: see the
                           // logChatTitleFailure calls below.
@@ -217,6 +227,7 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 docStore,
                 docIndex,
                 userId,
+                userEmail,
                 db,
                 write,
                 extraTools: PROJECT_EXTRA_TOOLS,
@@ -238,6 +249,21 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 nonce,
                 emitDone: false,
             });
+
+            // The stream protects its model/tool boundaries. Recheck both
+            // current project access and chat write access immediately before
+            // persisting the shared assistant turn.
+            if (!(await hasCurrentWriteAccess())) {
+                write(
+                    `data: ${JSON.stringify({
+                        type: "error",
+                        message: "This conversation is no longer available.",
+                        safe_to_display: true,
+                    })}\n\n`,
+                );
+                write("data: [DONE]\n\n");
+                return;
+            }
 
             const persistedEvents = stripTransientAssistantEvents(events);
             if (askInputsResponse) {
@@ -285,7 +311,11 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 );
             }
 
-            if (!chatTitle && lastUser?.content) {
+            if (
+                !chatTitle &&
+                lastUser?.content &&
+                (await hasCurrentWriteAccess())
+            ) {
                 const title = lastUser.content.slice(0, 120);
                 await updateChatTitle(db, { chatId, title });
                 chatTitle = title;
@@ -353,7 +383,10 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
                 console.log("[project-chat/stream] client aborted stream", {
                     chatId,
                 });
-                if (err instanceof AssistantStreamError) {
+                if (
+                    err instanceof AssistantStreamError &&
+                    (await hasCurrentWriteAccess())
+                ) {
                     const partial = buildCancelledAssistantMessage({
                         fullText: err.fullText,
                         events: err.events,
@@ -400,33 +433,35 @@ projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
             const errorFullText =
                 err instanceof AssistantStreamError ? err.fullText : "";
             try {
-                const citations = extractCitations(errorFullText, docIndex);
-                const saved = askInputsResponse
-                    ? null
-                    : await insertAssistantMessage(db, {
-                          chatId,
-                          assistantMessageId,
-                          events: errorEvents,
-                          citations,
-                          authorUserId: userId,
-                          inputMessageId,
-                      });
-                const saveError = saved && !saved.ok ? saved.error : null;
-                if (askInputsResponse) {
-                    await appendAssistantEventsToMessage(
-                        db,
-                        chatId,
-                        askInputsResponse.assistant_message_id,
-                        userId,
-                        errorEvents,
-                        citations,
-                    );
+                if (await hasCurrentWriteAccess()) {
+                    const citations = extractCitations(errorFullText, docIndex);
+                    const saved = askInputsResponse
+                        ? null
+                        : await insertAssistantMessage(db, {
+                              chatId,
+                              assistantMessageId,
+                              events: errorEvents,
+                              citations,
+                              authorUserId: userId,
+                              inputMessageId,
+                          });
+                    const saveError = saved && !saved.ok ? saved.error : null;
+                    if (askInputsResponse) {
+                        await appendAssistantEventsToMessage(
+                            db,
+                            chatId,
+                            askInputsResponse.assistant_message_id,
+                            userId,
+                            errorEvents,
+                            citations,
+                        );
+                    }
+                    if (saveError)
+                        console.error(
+                            "[project-chat/stream] failed to save error",
+                            saveError,
+                        );
                 }
-                if (saveError)
-                    console.error(
-                        "[project-chat/stream] failed to save error",
-                        saveError,
-                    );
             } catch (saveErr) {
                 console.error(
                     "[project-chat/stream] failed to save error",

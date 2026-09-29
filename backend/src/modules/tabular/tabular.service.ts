@@ -108,5 +108,10 @@ export {
 
 export { handleExtractionExtract, markExtractionJobFailed } from "./tabular.extractionJobs";
 export { sweepStaleGeneratingCells } from "./tabular.maintenance";
+export {
+    assertTabularReviewEditAccess,
+    assertTabularSourceReadAccess,
+    TabularAccessRevokedError,
+} from "./tabular.authorization";
 
 export { runExtractionJob, markExtractionFailed, type ExtractionDeps } from "./tabular.extraction";

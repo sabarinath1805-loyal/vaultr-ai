@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   getSignedUploadUrl: vi.fn(),
   headFile: vi.fn(),
   rpc: vi.fn(),
+  projectAccess: true,
   session: null as Record<string, unknown> | null,
   files: [] as Array<Record<string, unknown>>,
 }));
@@ -60,6 +61,18 @@ function queryFor(table: string) {
         if (!mocks.session) return { data: null, error: null };
         if (updatePayload) Object.assign(mocks.session, updatePayload);
         return { data: mocks.session, error: null };
+      }
+      if (table === "projects") {
+        return {
+          data: mocks.projectAccess
+            ? {
+                id: "77777777-7777-4777-8777-777777777777",
+                user_id: "11111111-1111-4111-8111-111111111111",
+                org_id: null,
+              }
+            : null,
+          error: null,
+        };
       }
       if (table === "upload_processing_jobs") {
         return { data: { id: "job-1", status: "queued" }, error: null };
@@ -134,6 +147,7 @@ app.use("/upload-sessions", uploadSessionsRouter);
 describe("upload session completion", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.projectAccess = true;
     mocks.session = {
       id: "22222222-2222-4222-8222-222222222222",
       user_id: "11111111-1111-4111-8111-111111111111",
@@ -209,6 +223,35 @@ describe("upload session completion", () => {
       status: "uploaded",
       observed_size_bytes: 4,
     });
+  });
+
+  it("refuses completion of an old project upload after edit access is revoked", async () => {
+    mocks.projectAccess = false;
+    mocks.session!.destination = {
+      scope: "project",
+      project_id: "77777777-7777-4777-8777-777777777777",
+    };
+    mocks.headFile.mockResolvedValue({
+      size: 4,
+      etag: "staged-etag",
+      contentType: "application/pdf",
+    });
+
+    const response = await request(app).post(
+      "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
+    );
+
+    // The old presigned PUT is a bounded bearer capability; once it has
+    // written staging bytes, application completion still requires current
+    // project authorization before sealing or queuing them.
+    expect(response.status).toBe(404);
+    expect(mocks.headFile).not.toHaveBeenCalled();
+    expect(mocks.copyFile).not.toHaveBeenCalled();
+    expect(mocks.rpc).not.toHaveBeenCalledWith(
+      "queue_upload_session_file_processing",
+      expect.anything(),
+    );
+    expect(mocks.files[0]).toMatchObject({ status: "pending_upload" });
   });
 
   it("answers 503, not 500, when object storage fails while sealing", async () => {
@@ -325,6 +368,39 @@ describe("upload session completion", () => {
       4,
       expect.any(Number),
     );
+  });
+
+  it("refreshes a project upload URL while current edit access remains", async () => {
+    mocks.session!.destination = {
+      scope: "project",
+      project_id: "77777777-7777-4777-8777-777777777777",
+    };
+
+    const response = await request(app).post(
+      "/upload-sessions/22222222-2222-4222-8222-222222222222/urls",
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.getSignedUploadUrl).toHaveBeenCalledOnce();
+    expect(response.body.files[0].upload.url).toBe(
+      "https://upload.example/refreshed",
+    );
+  });
+
+  it("does not issue a refreshed project URL after access is revoked", async () => {
+    mocks.projectAccess = false;
+    mocks.session!.destination = {
+      scope: "project",
+      project_id: "77777777-7777-4777-8777-777777777777",
+    };
+
+    const response = await request(app).post(
+      "/upload-sessions/22222222-2222-4222-8222-222222222222/urls",
+    );
+
+    expect(response.status).toBe(404);
+    expect(mocks.getSignedUploadUrl).not.toHaveBeenCalled();
+    expect(mocks.files[0]).toMatchObject({ status: "pending_upload" });
   });
 
   it("does not reclaim a verifying file whose lease is still fresh", async () => {

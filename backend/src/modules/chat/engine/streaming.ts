@@ -11,6 +11,7 @@ import { InvalidApiKeyError } from "../../../lib/llm/apiKeyErrors";
 import { reportError } from "../../../lib/observability/sentry";
 import type { Db } from "../../../lib/supabase";
 import { buildUserMcpTools, type McpToolEvent } from "../../../lib/mcpConnectors";
+import { authorizeCurrentTurnContext } from "./tools/toolDispatcher";
 import type { SourceDocument } from "../../../lib/sourceDocuments";
 import { buildGoogleDriveTools } from "../../../lib/integrations/googleDrive";
 import {
@@ -159,6 +160,8 @@ export class AssistantStreamAbortError extends AssistantStreamError {
   }
 }
 
+const CONTEXT_ACCESS_REVOKED = "This conversation is no longer available.";
+
 class AssistantStreamAskInputsPause extends Error {
   constructor() {
     super("Waiting for user input.");
@@ -201,6 +204,8 @@ export async function runLLMStream(params: {
   docStore: DocStore;
   docIndex: DocIndex;
   userId: string;
+  /** Current authenticated identity used for use-time grant checks. */
+  userEmail?: string | null;
   db: Db;
   write: (s: string) => void;
   extraTools?: unknown[];
@@ -265,6 +270,7 @@ export async function runLLMStream(params: {
     docStore,
     docIndex,
     userId,
+    userEmail,
     db,
     write: unsafeWrite,
     extraTools,
@@ -315,12 +321,31 @@ export async function runLLMStream(params: {
   const rawMsgs = apiMessages as { role: string; content: string | null }[];
   const baseSystemPrompt =
     rawMsgs[0]?.role === "system" ? (rawMsgs[0].content ?? "") : "";
+  // Project memory is a protected read in its own right. Check the current
+  // user authority immediately before asking the memory layer to load it;
+  // stale project-chat context must not make the memory read happen first.
+  let memoryProjectAuthorized = true;
+  if (includeMemory && memoryProjectId) {
+    try {
+      memoryProjectAuthorized = await authorizeCurrentTurnContext(
+        memoryProjectId,
+        tabularStore,
+        userId,
+        userEmail,
+        db,
+        docStore,
+        docIndex,
+      );
+    } catch {
+      memoryProjectAuthorized = false;
+    }
+  }
   const memory = await buildMemoryTurn({
     db,
     userId,
     systemPrompt: baseSystemPrompt,
     include: includeMemory,
-    projectId: memoryProjectId,
+    projectId: memoryProjectAuthorized ? memoryProjectId : null,
     sharedAudience: memorySharedAudience,
   });
   const systemPrompt = memory.systemPrompt;
@@ -353,6 +378,16 @@ export async function runLLMStream(params: {
   const courtlistenerTurnState: CourtlistenerTurnState = {
     casesByClusterId: new Map(),
   };
+  const activeWorkflowIds = new Set<string>();
+  const memoryProjectInContext = Boolean(
+    memoryProjectAuthorized && memoryProjectId && memory.message,
+  );
+  const pendingProviderDeltas: Array<
+    | { type: "content" | "reasoning"; text: string }
+    | { type: "reasoning_block_end" }
+  > = [];
+  const pendingToolCallStarts: string[] = [];
+  let contextAccessRevoked = false;
   let fullText = "";
   let iterText = "";
   let iterVisibleText = "";
@@ -466,8 +501,75 @@ export async function runLLMStream(params: {
     }
   };
 
+  const hasRevocableContext = () =>
+    Boolean(
+      projectId ||
+        memoryProjectInContext ||
+        tabularStore ||
+        activeWorkflowIds.size > 0 ||
+        Object.values(docIndex).some((document) => !!document.document_id),
+    );
+
+  const assertCurrentContextAccess = async () => {
+    if (!hasRevocableContext()) return;
+    try {
+      const allowed = await authorizeCurrentTurnContext(
+        projectId,
+        tabularStore,
+        userId,
+        userEmail,
+        db,
+        docStore,
+        docIndex,
+        [...activeWorkflowIds],
+      );
+      if (!allowed) throw new Error("Current turn context is unavailable.");
+      if (
+        memoryProjectInContext &&
+        memoryProjectId !== projectId &&
+        !(await authorizeCurrentTurnContext(
+          memoryProjectId,
+          undefined,
+          userId,
+          userEmail,
+          db,
+          docStore,
+          docIndex,
+          [...activeWorkflowIds],
+        ))
+      ) {
+        throw new Error("Current memory context is unavailable.");
+      }
+      return;
+    } catch {
+      // A database/access-check failure must not let old context stand in for
+      // current authority at a provider or client disclosure boundary.
+    }
+    contextAccessRevoked = true;
+    throw new UserFacingError(CONTEXT_ACCESS_REVOKED);
+  };
+
+  const flushPendingProviderDeltas = () => {
+    for (const delta of pendingProviderDeltas.splice(0)) {
+      if (delta.type === "content") {
+        iterText += delta.text;
+        streamVisibleContent(delta.text);
+      } else if (delta.type === "reasoning") {
+        iterReasoning += delta.text;
+        write(
+          `data: ${JSON.stringify({ type: "reasoning_delta", text: delta.text })}\n\n`,
+        );
+      } else if (iterReasoning) {
+        events.push({ type: "reasoning", text: iterReasoning });
+        write(`data: ${JSON.stringify({ type: "reasoning_block_end" })}\n\n`);
+        iterReasoning = "";
+      }
+    }
+  };
+
   try {
     throwIfAborted(signal);
+    await assertCurrentContextAccess();
     // Single request-time choke point for every runLLMStream caller (chat,
     // project chat, Word chat, tabular): router-prefixed models must be in the
     // user's saved selection.
@@ -512,16 +614,28 @@ export async function runLLMStream(params: {
       conversationId,
       callbacks: {
         onContentDelta: (delta) => {
+          if (hasRevocableContext()) {
+            pendingProviderDeltas.push({ type: "content", text: delta });
+            return;
+          }
           iterText += delta;
           streamVisibleContent(delta);
         },
         onReasoningDelta: (delta) => {
+          if (hasRevocableContext()) {
+            pendingProviderDeltas.push({ type: "reasoning", text: delta });
+            return;
+          }
           iterReasoning += delta;
           write(
             `data: ${JSON.stringify({ type: "reasoning_delta", text: delta })}\n\n`,
           );
         },
         onReasoningBlockEnd: () => {
+          if (hasRevocableContext()) {
+            pendingProviderDeltas.push({ type: "reasoning_block_end" });
+            return;
+          }
           if (!iterReasoning) return;
           events.push({ type: "reasoning", text: iterReasoning });
           write(`data: ${JSON.stringify({ type: "reasoning_block_end" })}\n\n`);
@@ -534,6 +648,10 @@ export async function runLLMStream(params: {
         // the tool executes — avoids the dead gap between message_stop
         // and the first tool-specific event.
         onToolCallStart: (call) => {
+          if (hasRevocableContext()) {
+            pendingToolCallStarts.push(call.name);
+            return;
+          }
           flushText();
           write(
             `data: ${JSON.stringify({
@@ -545,9 +663,16 @@ export async function runLLMStream(params: {
       },
       runTools: async (calls) => {
         throwIfAborted(signal);
+        await assertCurrentContextAccess();
+        flushPendingProviderDeltas();
         // Emit any text the model produced before this tool turn so the
         // UI sees it before the tool results stream in.
         flushText();
+        for (const name of pendingToolCallStarts.splice(0)) {
+          write(
+            `data: ${JSON.stringify({ type: "tool_call_start", name })}\n\n`,
+          );
+        }
 
         // Client-executed tools (Word add-in) round-trip through the SSE
         // stream and never enter the server dispatcher. They run before the
@@ -612,8 +737,16 @@ export async function runLLMStream(params: {
           apiKeys,
           nonce,
           signal,
+          userEmail,
         );
         throwIfAborted(signal);
+        for (const workflow of workflowsApplied) {
+          activeWorkflowIds.add(workflow.workflow_id);
+        }
+        // Tool results may contain newly read confidential material. Never
+        // return them to another provider round if access changed while a
+        // tool was running.
+        await assertCurrentContextAccess();
         for (const r of docsRead) {
           events.push({
             type: "doc_read",
@@ -714,6 +847,11 @@ export async function runLLMStream(params: {
         }));
       },
     });
+    // Protected-context output is held until a current authorization check at
+    // the provider boundary. This prevents a stream that began while access
+    // existed from continuing to disclose its answer after revocation.
+    await assertCurrentContextAccess();
+    flushPendingProviderDeltas();
   } catch (err) {
     if (isAskInputsPause(err)) {
       // The ask_inputs event has already been emitted and persisted in `events`.
@@ -726,7 +864,21 @@ export async function runLLMStream(params: {
         events.map(sanitizeAssistantEvent),
       );
     } else {
-      flushPartialTurn();
+      if (contextAccessRevoked) {
+        // Do not flush or persist answer text buffered from a context whose
+        // authority is now gone. Earlier authorized deltas may already have
+        // reached the client before a tool boundary; this error carries none.
+        pendingProviderDeltas.length = 0;
+        pendingToolCallStarts.length = 0;
+        fullText = "";
+        iterText = "";
+        iterVisibleText = "";
+        iterReasoning = "";
+        visibleTailBuffer = "";
+        events.length = 0;
+      } else {
+        flushPartialTurn();
+      }
       const safeToDisplay = err instanceof UserFacingError;
       // The response already started, so the HTTP 500 path never sees this:
       // it is the one report of the turn's failure. Reporting it HERE, before
@@ -791,10 +943,17 @@ export async function runLLMStream(params: {
       if (!pending) {
         const label = resolveDocLabel(docId, docStore, docIndex);
         pending = label
-          ? readDocumentContent(label, docStore, () => {}, docIndex, db, {
-              emitEvents: false,
-              signal,
-            })
+          ? (async () => {
+              try {
+                await assertCurrentContextAccess();
+              } catch {
+                return "";
+              }
+              return readDocumentContent(label, docStore, () => {}, docIndex, db, {
+                emitEvents: false,
+                signal,
+              });
+            })()
           : Promise.resolve("");
         sourceTextByDocId.set(docId, pending);
       }
@@ -807,6 +966,7 @@ export async function runLLMStream(params: {
         getCachedCaseOpinionTexts(courtlistenerTurnState, clusterId),
     );
   }
+  if (contextAccessRevoked) citations = [];
   devLog("[chat/stream] final citations", {
     hasCitationsBlock: citationDiagnostics.hasBlock,
     citationsBlockLength: citationDiagnostics.rawLength,

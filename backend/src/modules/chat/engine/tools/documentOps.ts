@@ -1,5 +1,6 @@
 import { createDocumentVersion, activateDocumentVersion, updateDocumentVersion } from "../../../documents/documents.service";
 import {
+  deleteFilesBestEffort,
   downloadFile,
   extractedTextKey,
   generatedDocKey,
@@ -71,6 +72,7 @@ export async function generateDocx(
     landscape?: boolean;
     numberSections?: boolean;
     projectId?: string | null;
+    authorizeWrite?: () => Promise<boolean>;
   },
 ) {
   try {
@@ -517,6 +519,7 @@ export async function generateDocx(
       userId,
       db,
       projectId: options?.projectId ?? null,
+      authorizeWrite: options?.authorizeWrite,
     });
   } catch (e) {
     return { error: String(e) };
@@ -915,8 +918,13 @@ async function persistGeneratedFile(params: {
   userId: string;
   db: Db;
   projectId?: string | null;
+  authorizeWrite?: () => Promise<boolean>;
 }) {
-  const { title, extension, buffer, userId, db, projectId } = params;
+  const { title, extension, buffer, userId, db, projectId, authorizeWrite } = params;
+  const canWrite = async () => (authorizeWrite ? await authorizeWrite() : true);
+  if (!(await canWrite())) {
+    return { error: "Project access is no longer available." };
+  }
   const docId = crypto.randomUUID().replace(/-/g, "");
   const filename = safeGeneratedFilename(title, extension);
   const key = generatedDocKey(userId, docId, filename);
@@ -957,6 +965,16 @@ async function persistGeneratedFile(params: {
     }
   }
 
+  // Rendering may outlast a project-share change. The object is still private
+  // here; recheck immediately before creating its tenant-visible row.
+  if (!(await canWrite())) {
+    await deleteFilesBestEffort(
+      [key, pdfStoragePath],
+      "generated-document-access-revoked",
+    );
+    return { error: "Project access is no longer available." };
+  }
+
   const downloadUrl = buildDownloadUrl(key, filename);
   const { data: docRow, error: docErr } = await db
     .from("documents")
@@ -968,11 +986,24 @@ async function persistGeneratedFile(params: {
     .select("id")
     .single();
   if (docErr || !docRow) {
+    await deleteFilesBestEffort(
+      [key, pdfStoragePath],
+      "generated-document-unrecorded",
+    );
     return {
       error: `Failed to record generated document: ${docErr?.message ?? "unknown"}`,
     };
   }
   const documentId = docRow.id as string;
+
+  if (!(await canWrite())) {
+    await db.from("documents").delete().eq("id", documentId);
+    await deleteFilesBestEffort(
+      [key, pdfStoragePath],
+      "generated-document-access-revoked-before-version",
+    );
+    return { error: "Project access is no longer available." };
+  }
 
   const { data: versionRow, error: verErr } = await createDocumentVersion(db, {
       document_id: documentId,
@@ -985,8 +1016,13 @@ async function persistGeneratedFile(params: {
       size_bytes: buffer.byteLength,
       page_count: null,
       content_sha256: contentSha256(buffer),
-    });
+  });
   if (verErr || !versionRow) {
+    await db.from("documents").delete().eq("id", documentId);
+    await deleteFilesBestEffort(
+      [key, pdfStoragePath],
+      "generated-document-version-unrecorded",
+    );
     return {
       error: `Failed to record generated document version: ${verErr?.message ?? "unknown"}`,
     };
@@ -1032,7 +1068,10 @@ export async function generateExcel(
   sheets: unknown[],
   userId: string,
   db: Db,
-  options?: { projectId?: string | null },
+  options?: {
+    projectId?: string | null;
+    authorizeWrite?: () => Promise<boolean>;
+  },
 ) {
   try {
     const normalizedTitle = typeof title === "string" ? title : "Workbook";
@@ -1047,6 +1086,7 @@ export async function generateExcel(
       userId,
       db,
       projectId: options?.projectId ?? null,
+      authorizeWrite: options?.authorizeWrite,
     });
   } catch (e) {
     return { error: String(e) };
@@ -1058,7 +1098,10 @@ export async function generatePpt(
   slides: unknown[],
   userId: string,
   db: Db,
-  options?: { projectId?: string | null },
+  options?: {
+    projectId?: string | null;
+    authorizeWrite?: () => Promise<boolean>;
+  },
 ) {
   try {
     const normalizedTitle = typeof title === "string" ? title : "Presentation";
@@ -1073,6 +1116,7 @@ export async function generatePpt(
       userId,
       db,
       projectId: options?.projectId ?? null,
+      authorizeWrite: options?.authorizeWrite,
     });
   } catch (e) {
     return { error: String(e) };
@@ -1109,6 +1153,8 @@ export async function runEditDocument(params: {
   userId: string;
   edits: EditInput[];
   db: Db;
+  /** Current source edit authority, checked at each protected boundary. */
+  authorize?: () => Promise<boolean>;
   /**
    * If provided, append these edits to the existing turn-scoped version
    * (overwrites the file at storagePath and reuses the document_versions
@@ -1134,6 +1180,10 @@ export async function runEditDocument(params: {
   | { ok: false; error: string }
 > {
   const { documentId, userId, edits, db, reuseVersion } = params;
+  const canEdit = async () => (params.authorize ? await params.authorize() : true);
+  if (!(await canEdit())) {
+    return { ok: false, error: "Document not found." };
+  }
 
   const { data: doc } = await db
     .from("documents")
@@ -1146,6 +1196,9 @@ export async function runEditDocument(params: {
   let versionFilename =
     activeVersion?.filename?.trim() || "Untitled document";
 
+  if (!(await canEdit())) {
+    return { ok: false, error: "Document not found." };
+  }
   const current = await loadCurrentVersionBytes(documentId, db);
   if (!current) return { ok: false, error: "Could not load document bytes." };
 
@@ -1187,9 +1240,33 @@ export async function runEditDocument(params: {
     versionRowId = reuseVersion.versionId;
     nextVersionNumber = reuseVersion.versionNumber;
 
+    if (!(await canEdit())) {
+      return { ok: false, error: "Document not found." };
+    }
     const clear = await updateDocumentVersion(db, documentId, versionRowId, { content_sha256: null });
     if (clear.error || !clear.data) return { ok: false, error: "Document version is unavailable." };
+    if (!(await canEdit())) {
+      await updateDocumentVersion(db, documentId, versionRowId, {
+        content_sha256: contentSha256(current.bytes),
+      });
+      return { ok: false, error: "Document not found." };
+    }
     await uploadFile(newPath, ab, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    if (!(await canEdit())) {
+      const originalBytes = current.bytes.buffer.slice(
+        current.bytes.byteOffset,
+        current.bytes.byteOffset + current.bytes.byteLength,
+      ) as ArrayBuffer;
+      await uploadFile(
+        newPath,
+        originalBytes,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      );
+      await updateDocumentVersion(db, documentId, versionRowId, {
+        content_sha256: contentSha256(current.bytes),
+      });
+      return { ok: false, error: "Document not found." };
+    }
     const updated = await updateDocumentVersion(db, documentId, versionRowId, {
       file_type: "docx", size_bytes: editedBytes.byteLength, page_count: null,
       content_sha256: contentSha256(editedBytes), pdf_storage_path: null,
@@ -1198,6 +1275,9 @@ export async function runEditDocument(params: {
   } else {
     const versionId = crypto.randomUUID().replace(/-/g, "");
     newPath = `documents/${userId}/${documentId}/edits/${versionId}.docx`;
+    if (!(await canEdit())) {
+      return { ok: false, error: "Document not found." };
+    }
     await uploadFile(
       newPath,
       ab,
@@ -1220,6 +1300,11 @@ export async function runEditDocument(params: {
       (prevRow?.filename as string | null)?.trim() || "Untitled document";
     versionFilename = inheritedFilename;
 
+    if (!(await canEdit())) {
+      await deleteFilesBestEffort([newPath], "edited-document-access-revoked");
+      return { ok: false, error: "Document not found." };
+    }
+
     const { data: versionRow, error: verErr } = await createDocumentVersion(db, {
         document_id: documentId,
         storage_path: newPath,
@@ -1232,6 +1317,7 @@ export async function runEditDocument(params: {
         content_sha256: contentSha256(editedBytes),
       }, { activate: false });
     if (verErr || !versionRow) {
+      await deleteFilesBestEffort([newPath], "edited-document-version-unrecorded");
       return { ok: false, error: "Failed to record document version." };
     }
     versionRowId = versionRow.id as string;
@@ -1251,6 +1337,9 @@ export async function runEditDocument(params: {
     context_after: c.contextAfter ?? "",
     status: "pending" as const,
   }));
+  if (!(await canEdit())) {
+    return { ok: false, error: "Document not found." };
+  }
   const { data: insertedEdits, error: editsErr } = await db
     .from("document_edits")
     .insert(editRows)
@@ -1262,6 +1351,9 @@ export async function runEditDocument(params: {
     return { ok: false, error: "Failed to record edits." };
   }
 
+  if (!(await canEdit())) {
+    return { ok: false, error: "Document not found." };
+  }
   const activation = await activateDocumentVersion(db, documentId, versionRowId);
   if (activation.error || !activation.activated) {
     return { ok: false, error: "Failed to activate document version." };

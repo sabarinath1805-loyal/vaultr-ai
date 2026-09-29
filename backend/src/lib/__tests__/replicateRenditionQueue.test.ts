@@ -61,8 +61,51 @@ function replicationDb() {
             return { data: args.p_versions.map((row, index) => ({ ...row, id: `new-version-${index + 1}` })), error: null };
         }),
         from(table: string) {
+            const filters: Record<string, unknown> = {};
+            const accessQuery = {
+                select: () => accessQuery,
+                eq(column: string, value: unknown) {
+                    filters[column] = value;
+                    return accessQuery;
+                },
+                maybeSingle: async () => ({
+                    data:
+                        table === "documents" && filters.id === "asset-1"
+                            ? {
+                                  id: "asset-1",
+                                  user_id: null,
+                                  project_id: null,
+                                  org_id: null,
+                                  workflow_id: "workflow-1",
+                                  current_version_id: null,
+                              }
+                            : table === "workflows"
+                              ? {
+                                    id: filters.id,
+                                    user_id: "user-1",
+                                    org_id: null,
+                                }
+                              : null,
+                    error: null,
+                }),
+                single: async () => ({
+                    data:
+                        table === "documents" && filters.id === "asset-1"
+                            ? {
+                                  id: "asset-1",
+                                  user_id: null,
+                                  project_id: null,
+                                  org_id: null,
+                                  workflow_id: "workflow-1",
+                                  current_version_id: null,
+                              }
+                            : null,
+                    error: null,
+                }),
+            };
             if (table === "documents") {
                 return {
+                    ...accessQuery,
                     insert(rows: Record<string, unknown>[]) {
                         return {
                             select: async () => ({
@@ -81,6 +124,7 @@ function replicationDb() {
             }
             if (table === "document_versions") {
                 return {
+                    ...accessQuery,
                     insert(rows: Record<string, unknown>[]) {
                         versionRows.push(rows);
                         return {
@@ -95,7 +139,7 @@ function replicationDb() {
                     },
                 };
             }
-            throw new Error(`Unexpected table: ${table}`);
+            return accessQuery;
         },
     };
     return { db, versionRows };
@@ -119,6 +163,10 @@ function makeStore(): DocStore {
 }
 
 async function replicate(db: unknown, index: DocIndex, count?: number) {
+    index[SOURCE_LABEL] ??= {
+        document_id: "asset-1",
+        filename: "Precedent.docx",
+    };
     return runToolCalls(
         [
             {

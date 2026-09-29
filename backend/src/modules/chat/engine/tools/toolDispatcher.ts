@@ -31,7 +31,12 @@ import {
   devLog,
   resolveDocLabel,
 } from "../types";
-import { downloadFile, storageKey, uploadFile } from "../../../../lib/storage";
+import {
+  deleteFilesBestEffort,
+  downloadFile,
+  storageKey,
+  uploadFile,
+} from "../../../../lib/storage";
 import { convertedPdfKey, docxToPdf } from "../../../../lib/convert";
 import { enqueueConversion } from "../../../../lib/queue/conversionQueue";
 import {
@@ -79,6 +84,199 @@ import {
   type CourtlistenerTurnState,
 } from "./courtlistenerTurnState";
 import type { Db } from "../../../../lib/supabase";
+import {
+  can,
+  checkProjectAccess,
+  checkWorkflowAccess,
+  ensureDocAccess,
+  ensureReviewAccess,
+} from "../../../../lib/access";
+
+const ACCESS_REVOKED_TOOL_ERROR = "This resource is no longer available.";
+
+async function currentProjectAccess(
+  projectId: string,
+  userId: string,
+  userEmail: string | null | undefined,
+  db: Db,
+) {
+  return checkProjectAccess(projectId, userId, userEmail, db);
+}
+
+async function authorizeProjectRead(
+  projectId: string | null | undefined,
+  userId: string,
+  userEmail: string | null | undefined,
+  db: Db,
+): Promise<boolean> {
+  if (!projectId) return true;
+  return (await currentProjectAccess(projectId, userId, userEmail, db)).ok;
+}
+
+async function authorizeProjectWrite(
+  projectId: string | null | undefined,
+  userId: string,
+  userEmail: string | null | undefined,
+  db: Db,
+): Promise<boolean> {
+  if (!projectId) return true;
+  const access = await currentProjectAccess(projectId, userId, userEmail, db);
+  return access.ok && can(access.projectRole, "content.edit");
+}
+
+async function authorizeDocumentIdsRead(
+  documentIds: string[],
+  userId: string,
+  userEmail: string | null | undefined,
+  db: Db,
+): Promise<boolean> {
+  const ids = [...new Set(documentIds.filter(Boolean))];
+  if (ids.length === 0) return true;
+  const { data, error } = await db
+    .from("documents")
+    .select("id, user_id, project_id, org_id, workflow_id")
+    .in("id", ids);
+  if (error || !data || data.length !== ids.length) return false;
+
+  const accessByContainer = new Map<string, boolean>();
+  for (const document of data as {
+    id: string;
+    user_id: string | null;
+    project_id: string | null;
+    org_id?: string | null;
+    workflow_id?: string | null;
+  }[]) {
+    const container = document.project_id
+      ? `project:${document.project_id}`
+      : document.workflow_id
+        ? `workflow:${document.workflow_id}`
+        : document.org_id
+          ? `org:${document.org_id}`
+          : null;
+    if (container && accessByContainer.has(container)) {
+      if (!accessByContainer.get(container)) return false;
+      continue;
+    }
+    const access = await ensureDocAccess(document, userId, userEmail, db);
+    if (container) accessByContainer.set(container, access.ok);
+    if (!access.ok) return false;
+  }
+  return true;
+}
+
+async function authorizeCapturedDocument(
+  docLabel: string,
+  docStore: DocStore,
+  docIndex: DocIndex | undefined,
+  userId: string,
+  userEmail: string | null | undefined,
+  db: Db,
+  capability: "read" | "edit" = "read",
+): Promise<boolean> {
+  const info = docStore.get(docLabel);
+  if (!info) return false;
+  // Word's active document and explicit request-level text attachments are
+  // bound to this authenticated request rather than a persistent tenant row.
+  if (info.inline_text !== undefined && !docIndex?.[docLabel]) return true;
+  const indexed = docIndex?.[docLabel];
+  if (!indexed?.document_id) return false;
+  const { data: document, error } = await db
+    .from("documents")
+    .select("id, user_id, project_id, org_id, workflow_id")
+    .eq("id", indexed.document_id)
+    .maybeSingle();
+  if (error || !document) return false;
+  const access = await ensureDocAccess(
+    document as {
+      user_id: string | null;
+      project_id: string | null;
+      org_id?: string | null;
+      workflow_id?: string | null;
+    },
+    userId,
+    userEmail,
+    db,
+  );
+  if (!access.ok) return false;
+  return capability === "read" || can(access.projectRole, "content.edit");
+}
+
+async function authorizeReviewRead(
+  store: TabularCellStore | undefined,
+  userId: string,
+  userEmail: string | null | undefined,
+  db: Db,
+): Promise<boolean> {
+  if (!store?.reviewId) return false;
+  const { data: review, error } = await db
+    .from("tabular_reviews")
+    .select("id, user_id, project_id, org_id")
+    .eq("id", store.reviewId)
+    .maybeSingle();
+  if (error || !review) return false;
+  const access = await ensureReviewAccess(
+    review as {
+      id: string;
+      user_id: string | null;
+      project_id: string | null;
+      org_id?: string | null;
+    },
+    userId,
+    userEmail,
+    db,
+  );
+  if (!access.ok) return false;
+  return authorizeDocumentIdsRead(
+    store.documents.flatMap((document) => document.sourceDocumentIds),
+    userId,
+    userEmail,
+    db,
+  );
+}
+
+export async function authorizeCurrentTurnContext(
+  projectId: string | null | undefined,
+  tabularStore: TabularCellStore | undefined,
+  userId: string,
+  userEmail: string | null | undefined,
+  db: Db,
+  docStore: DocStore,
+  docIndex: DocIndex | undefined,
+  workflowIds: string[] = [],
+): Promise<boolean> {
+  if (
+    projectId &&
+    !(await authorizeProjectRead(projectId, userId, userEmail, db))
+  ) {
+    return false;
+  }
+  if (
+    tabularStore &&
+    !(await authorizeReviewRead(tabularStore, userId, userEmail, db))
+  ) {
+    return false;
+  }
+  for (const workflowId of workflowIds) {
+    if (!(await checkWorkflowAccess(workflowId, userId, userEmail, db)).ok) {
+      return false;
+    }
+  }
+  for (const docLabel of docStore.keys()) {
+    if (
+      !(await authorizeCapturedDocument(
+        docLabel,
+        docStore,
+        docIndex,
+        userId,
+        userEmail,
+        db,
+      ))
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
 
 function sourceMaterialNotice(
   sourceKind: "document" | "library_template" | "workflow_asset" | undefined,
@@ -277,7 +475,7 @@ export async function runToolCalls(
   write: (s: string) => void,
   workflowStore?: WorkflowStore,
   tabularStore?: TabularCellStore,
-  docIndex?: DocIndex,
+  docIndex: DocIndex = {},
   turnEditState?: TurnEditState,
   turnReadState?: TurnReadState,
   projectId?: string | null,
@@ -285,6 +483,7 @@ export async function runToolCalls(
   apiKeys?: import("../../../../lib/llm").UserApiKeys,
   nonce?: string,
   signal?: AbortSignal,
+  userEmail?: string | null,
 ): Promise<{
   toolResults: unknown[];
   docsRead: {
@@ -444,6 +643,34 @@ export async function runToolCalls(
       /* ignore */
     }
 
+    const isExternalAction =
+      tc.function.name.startsWith(GOOGLE_DRIVE_TOOL_PREFIX) ||
+      isGoogleWorkspaceTool(tc.function.name) ||
+      tc.function.name.startsWith("mcp_") ||
+      Object.values(COURTLISTENER_TOOL_NAMES).includes(
+        tc.function.name as (typeof COURTLISTENER_TOOL_NAMES)[keyof typeof COURTLISTENER_TOOL_NAMES],
+      );
+    if (
+      isExternalAction &&
+      !(await authorizeCurrentTurnContext(
+        projectId,
+        tabularStore,
+        userId,
+        userEmail,
+        db,
+        docStore,
+        docIndex,
+        workflowsApplied.map((workflow) => workflow.workflow_id),
+      ))
+    ) {
+      toolResults.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: JSON.stringify({ ok: false, error: ACCESS_REVOKED_TOOL_ERROR }),
+      });
+      continue;
+    }
+
     if (
       tc.function.name.startsWith(GOOGLE_DRIVE_TOOL_PREFIX) ||
       isGoogleWorkspaceTool(tc.function.name)
@@ -526,6 +753,23 @@ export async function runToolCalls(
     if (tc.function.name === "read_document") {
       const rawDocId = args.doc_id as string;
       const docId = resolveDocLabel(rawDocId, docStore, docIndex) ?? rawDocId;
+      if (
+        !(await authorizeCapturedDocument(
+          docId,
+          docStore,
+          docIndex,
+          userId,
+          userEmail,
+          db,
+        ))
+      ) {
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: JSON.stringify({ ok: false, error: ACCESS_REVOKED_TOOL_ERROR }),
+        });
+        continue;
+      }
       const readIdentity = await getTurnReadIdentity({
         docLabel: docId,
         docStore,
@@ -541,6 +785,23 @@ export async function runToolCalls(
           role: "tool",
           tool_call_id: tc.id,
           content: `Document filename: ${promptFilename}${sourceNotice ? `\n${sourceNotice}` : ""}\n\n${duplicateReadDocumentResult(readIdentity)}`,
+        });
+        continue;
+      }
+      if (
+        !(await authorizeCapturedDocument(
+          docId,
+          docStore,
+          docIndex,
+          userId,
+          userEmail,
+          db,
+        ))
+      ) {
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: JSON.stringify({ ok: false, error: ACCESS_REVOKED_TOOL_ERROR }),
         });
         continue;
       }
@@ -600,6 +861,23 @@ export async function runToolCalls(
         });
         continue;
       }
+      if (
+        !(await authorizeCapturedDocument(
+          docId,
+          docStore,
+          docIndex,
+          userId,
+          userEmail,
+          db,
+        ))
+      ) {
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: JSON.stringify({ ok: false, error: ACCESS_REVOKED_TOOL_ERROR }),
+        });
+        continue;
+      }
       const query = (args.query as string) ?? "";
       const maxResults =
         typeof args.max_results === "number" ? args.max_results : undefined;
@@ -611,6 +889,23 @@ export async function runToolCalls(
         docIndex,
         db,
       });
+      if (
+        !(await authorizeCapturedDocument(
+          docId,
+          docStore,
+          docIndex,
+          userId,
+          userEmail,
+          db,
+        ))
+      ) {
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: JSON.stringify({ ok: false, error: ACCESS_REVOKED_TOOL_ERROR }),
+        });
+        continue;
+      }
       const content = await findInDocumentContent({
         docLabel: docId,
         query,
@@ -646,11 +941,21 @@ export async function runToolCalls(
       }
       toolResults.push({ role: "tool", tool_call_id: tc.id, content });
     } else if (tc.function.name === "list_documents") {
-      const list = Array.from(docStore.entries()).map(([doc_id, info]) => ({
-        doc_id,
-        filename: info.filename,
-        file_type: info.file_type,
-      }));
+      const list: { doc_id: string; filename: string; file_type: string }[] = [];
+      for (const [doc_id, info] of docStore.entries()) {
+        if (
+          await authorizeCapturedDocument(
+            doc_id,
+            docStore,
+            docIndex,
+            userId,
+            userEmail,
+            db,
+          )
+        ) {
+          list.push({ doc_id, filename: info.filename, file_type: info.file_type });
+        }
+      }
       toolResults.push({
         role: "tool",
         tool_call_id: tc.id,
@@ -663,6 +968,19 @@ export async function runToolCalls(
       );
       const parts: string[] = [];
       for (const docId of docIds) {
+        if (
+          !(await authorizeCapturedDocument(
+            docId,
+            docStore,
+            docIndex,
+            userId,
+            userEmail,
+            db,
+          ))
+        ) {
+          parts.push(`${docId}: ${ACCESS_REVOKED_TOOL_ERROR}`);
+          continue;
+        }
         const readIdentity = await getTurnReadIdentity({
           docLabel: docId,
           docStore,
@@ -680,6 +998,19 @@ export async function runToolCalls(
               readIdentity,
             )}`,
           );
+          continue;
+        }
+        if (
+          !(await authorizeCapturedDocument(
+            docId,
+            docStore,
+            docIndex,
+            userId,
+            userEmail,
+            db,
+          ))
+        ) {
+          parts.push(`${docId}: ${ACCESS_REVOKED_TOOL_ERROR}`);
           continue;
         }
         const content = await readDocumentContent(
@@ -719,22 +1050,36 @@ export async function runToolCalls(
         content: parts.join("\n\n"),
       });
     } else if (tc.function.name === "list_workflows") {
-      const list = workflowStore
-        ? Array.from(workflowStore.entries())
-            .filter(([, workflow]) => workflow.listed !== false)
-            .map(([id, w]) => ({
-              id,
-              title: w.title,
-            }))
-        : [];
+      const list: { id: string; title: string }[] = [];
+      for (const [id, workflow] of workflowStore ?? []) {
+        if (workflow.listed === false) continue;
+        const access = await checkWorkflowAccess(id, userId, userEmail, db);
+        if (access.ok) list.push({ id, title: workflow.title });
+      }
       toolResults.push({
         role: "tool",
         tool_call_id: tc.id,
         content: JSON.stringify(list),
       });
     } else if (tc.function.name === "read_workflow") {
-      const wfId = args.workflow_id as string;
+      const wfId =
+        typeof args.workflow_id === "string" ? args.workflow_id : "";
       const wf = workflowStore?.get(wfId);
+      const isPublishedCatalogEntry =
+        Boolean(wf) && wfId.startsWith("builtin-") && wf?.listed === false;
+      const workflowAuthorized = wf && isPublishedCatalogEntry
+        ? true
+        : wf
+          ? (await checkWorkflowAccess(wfId, userId, userEmail, db)).ok
+          : false;
+      if (!wf || !workflowAuthorized) {
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: `Workflow '${wfId}' not found.`,
+        });
+        continue;
+      }
       if (wf) {
         write(
           `data: ${JSON.stringify({ type: "workflow_applied", workflow_id: wfId, title: wf.title })}\n\n`,
@@ -750,7 +1095,12 @@ export async function runToolCalls(
             file_type: asset.file_type,
             filename: asset.filename,
             source_kind: "workflow_asset",
+            workflow_id: wfId,
           });
+          docIndex[docId] = {
+            document_id: asset.asset_id,
+            filename: asset.filename,
+          };
           assetHandles.push({
             doc_id: docId,
             filename: asset.filename,
@@ -780,6 +1130,14 @@ export async function runToolCalls(
         content: `${instructions}${assetNotice}`,
       });
     } else if (tc.function.name === "read_table_cells" && tabularStore) {
+      if (!(await authorizeReviewRead(tabularStore, userId, userEmail, db))) {
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: JSON.stringify({ ok: false, error: ACCESS_REVOKED_TOOL_ERROR }),
+        });
+        continue;
+      }
       const colIndices = args.col_indices as number[] | undefined;
       const rowIndices = args.row_indices as number[] | undefined;
 
@@ -1460,6 +1818,24 @@ export async function runToolCalls(
           tool_call_id: tc.id,
           content: JSON.stringify({ error: err }),
         });
+      } else if (
+        !(await authorizeCapturedDocument(
+          docId,
+          docStore,
+          docIndex,
+          userId,
+          userEmail,
+          db,
+          "edit",
+        ))
+      ) {
+        const err = ACCESS_REVOKED_TOOL_ERROR;
+        emitEditError(docInfo.filename, indexed.document_id, err);
+        toolResults.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: JSON.stringify({ error: err }),
+        });
       } else {
         write(
           `data: ${JSON.stringify({
@@ -1483,6 +1859,16 @@ export async function runToolCalls(
           edits,
           db,
           reuseVersion,
+          authorize: () =>
+            authorizeCapturedDocument(
+              docId,
+              docStore,
+              docIndex,
+              userId,
+              userEmail,
+              db,
+              "edit",
+            ),
         });
 
         if (result.ok) {
@@ -1609,6 +1995,7 @@ export async function runToolCalls(
       const isImmutableSource =
         sourceInfo?.source_kind === "library_template" ||
         sourceInfo?.source_kind === "workflow_asset";
+      let uploadedObjectKeys: string[] = [];
 
       if (!sourceInfo) {
         fail(`Document '${rawDocId}' is not available in this chat.`);
@@ -1621,6 +2008,18 @@ export async function runToolCalls(
         fail(
           "A new_filename is required when copying a Library Template or workflow asset.",
         );
+      } else if (
+        !(await authorizeCapturedDocument(
+          sourceLabel,
+          docStore,
+          docIndex,
+          userId,
+          userEmail,
+          db,
+        )) ||
+        !(await authorizeProjectWrite(projectId, userId, userEmail, db))
+      ) {
+        fail(ACCESS_REVOKED_TOOL_ERROR);
       } else {
         try {
           // Pull the active version once — every copy gets the
@@ -1631,10 +2030,37 @@ export async function runToolCalls(
             : null;
           const sourcePath = active?.storage_path ?? sourceInfo.storage_path;
           const sourcePdfPath = active?.pdf_storage_path ?? null;
+          if (
+            !(await authorizeCapturedDocument(
+              sourceLabel,
+              docStore,
+              docIndex,
+              userId,
+              userEmail,
+              db,
+            ))
+          ) {
+            fail(ACCESS_REVOKED_TOOL_ERROR);
+            continue;
+          }
           const raw = await downloadFile(sourcePath);
-          let pdfBytes = sourcePdfPath
-            ? await downloadFile(sourcePdfPath)
-            : null;
+          let pdfBytes: ArrayBuffer | null = null;
+          if (sourcePdfPath) {
+            if (
+              !(await authorizeCapturedDocument(
+                sourceLabel,
+                docStore,
+                docIndex,
+                userId,
+                userEmail,
+                db,
+              ))
+            ) {
+              fail(ACCESS_REVOKED_TOOL_ERROR);
+              continue;
+            }
+            pdfBytes = await downloadFile(sourcePdfPath);
+          }
           if (!raw) {
             fail("Could not read the source document's bytes from storage.");
           } else {
@@ -1697,6 +2123,24 @@ export async function runToolCalls(
               sourceInfo.file_type,
             );
 
+            // Storage uploads start as soon as uploadFile is called. Check
+            // both sides before starting any copy, then check again after all
+            // uploads settle and before making their rows visible.
+            if (
+              !(await authorizeCapturedDocument(
+                sourceLabel,
+                docStore,
+                docIndex,
+                userId,
+                userEmail,
+                db,
+              )) ||
+              !(await authorizeProjectWrite(projectId, userId, userEmail, db))
+            ) {
+              fail(ACCESS_REVOKED_TOOL_ERROR);
+              continue;
+            }
+
             // Parallel uploads: the doc bytes (and PDF
             // rendition if any) for every new copy.
             const uploadJobs: Promise<unknown>[] = [];
@@ -1716,7 +2160,39 @@ export async function runToolCalls(
                 newPdfKeys.push(null);
               }
             }
-            await Promise.all(uploadJobs);
+            uploadedObjectKeys = [
+              ...newKeys,
+              ...newPdfKeys.filter((key): key is string => !!key),
+            ];
+            const uploadResults = await Promise.allSettled(uploadJobs);
+            const failedUpload = uploadResults.find(
+              (result) => result.status === "rejected",
+            );
+            if (failedUpload?.status === "rejected") {
+              throw failedUpload.reason;
+            }
+
+            // Storage bytes are not a standing authorization grant. Recheck
+            // both the source and destination before creating visible rows.
+            if (
+              !(await authorizeCapturedDocument(
+                sourceLabel,
+                docStore,
+                docIndex,
+                userId,
+                userEmail,
+                db,
+              )) ||
+              !(await authorizeProjectWrite(projectId, userId, userEmail, db))
+            ) {
+              await deleteFilesBestEffort(
+                uploadedObjectKeys,
+                "replicate-access-revoked",
+              );
+              uploadedObjectKeys = [];
+              fail(ACCESS_REVOKED_TOOL_ERROR);
+              continue;
+            }
 
             // Bytes are durable; now record the rows in one
             // round-trip per table.
@@ -1737,12 +2213,40 @@ export async function runToolCalls(
               !insertedDocs ||
               insertedDocs.length !== newDocs.length
             ) {
+              await deleteFilesBestEffort(
+                uploadedObjectKeys,
+                "replicate-document-unrecorded",
+              );
+              uploadedObjectKeys = [];
               console.error(
                 "[replicate-document] failed to record documents",
                 docErr,
               );
               fail("Failed to record replicated documents");
             } else {
+              if (
+                !(await authorizeCapturedDocument(
+                  sourceLabel,
+                  docStore,
+                  docIndex,
+                  userId,
+                  userEmail,
+                  db,
+                )) ||
+                !(await authorizeProjectWrite(projectId, userId, userEmail, db))
+              ) {
+                await db
+                  .from("documents")
+                  .delete()
+                  .in("id", newDocs.map((document) => document.id));
+                await deleteFilesBestEffort(
+                  uploadedObjectKeys,
+                  "replicate-access-revoked-before-version",
+                );
+                uploadedObjectKeys = [];
+                fail(ACCESS_REVOKED_TOOL_ERROR);
+                continue;
+              }
               // Bulk insert N versions in one round-trip.
               const versionRows = newDocs.map((d, idx) => ({
                 document_id: d.id,
@@ -1775,12 +2279,18 @@ export async function runToolCalls(
                     "id",
                     newDocs.map((d) => d.id),
                   );
+                await deleteFilesBestEffort(
+                  uploadedObjectKeys,
+                  "replicate-version-unrecorded",
+                );
+                uploadedObjectKeys = [];
                 console.error(
                   "[replicate-document] failed to record document versions",
                   verErr,
                 );
                 fail("Failed to record replicated document versions");
               } else {
+                uploadedObjectKeys = [];
                 const versionByDocId = new Map<string, string>();
                 for (const v of insertedVersions as {
                   id: string;
@@ -1909,6 +2419,12 @@ export async function runToolCalls(
             }
           }
         } catch (e) {
+          if (uploadedObjectKeys.length > 0) {
+            await deleteFilesBestEffort(
+              uploadedObjectKeys,
+              "replicate-document-failed",
+            );
+          }
           console.error("[replicate-document] failed", e);
           fail("replicate_document failed");
         }
@@ -1926,12 +2442,28 @@ export async function runToolCalls(
       write(
         `data: ${JSON.stringify({ type: "doc_created_start", filename: previewFilename })}\n\n`,
       );
+      const authorizeWrite = () =>
+        authorizeProjectWrite(projectId, userId, userEmail, db);
+      if (!(await authorizeWrite())) {
+        registerGeneratedDocument(
+          tc,
+          { error: ACCESS_REVOKED_TOOL_ERROR },
+          previewFilename,
+          "docx",
+        );
+        continue;
+      }
       const result = await generateDocx(
         title,
         args.sections as unknown[],
         userId,
         db,
-        { landscape, numberSections, projectId: projectId ?? null },
+        {
+          landscape,
+          numberSections,
+          projectId: projectId ?? null,
+          authorizeWrite,
+        },
       );
       registerGeneratedDocument(
         tc,
@@ -1946,12 +2478,23 @@ export async function runToolCalls(
       write(
         `data: ${JSON.stringify({ type: "doc_created_start", filename: previewFilename })}\n\n`,
       );
+      const authorizeWrite = () =>
+        authorizeProjectWrite(projectId, userId, userEmail, db);
+      if (!(await authorizeWrite())) {
+        registerGeneratedDocument(
+          tc,
+          { error: ACCESS_REVOKED_TOOL_ERROR },
+          previewFilename,
+          "xlsx",
+        );
+        continue;
+      }
       const result = await generateExcel(
         title,
         args.sheets as unknown[],
         userId,
         db,
-        { projectId: projectId ?? null },
+        { projectId: projectId ?? null, authorizeWrite },
       );
       registerGeneratedDocument(
         tc,
@@ -1966,12 +2509,23 @@ export async function runToolCalls(
       write(
         `data: ${JSON.stringify({ type: "doc_created_start", filename: previewFilename })}\n\n`,
       );
+      const authorizeWrite = () =>
+        authorizeProjectWrite(projectId, userId, userEmail, db);
+      if (!(await authorizeWrite())) {
+        registerGeneratedDocument(
+          tc,
+          { error: ACCESS_REVOKED_TOOL_ERROR },
+          previewFilename,
+          "pptx",
+        );
+        continue;
+      }
       const result = await generatePpt(
         title,
         args.slides as unknown[],
         userId,
         db,
-        { projectId: projectId ?? null },
+        { projectId: projectId ?? null, authorizeWrite },
       );
       registerGeneratedDocument(
         tc,

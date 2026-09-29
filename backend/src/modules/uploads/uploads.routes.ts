@@ -166,8 +166,14 @@ uploadSessionsRouter.post(
       return void res.status(503).json({ detail: "Storage is not configured" });
     }
     const userId = res.locals.userId as string;
+    const userEmail = res.locals.userEmail as string | undefined;
     const db = createServerSupabase();
-    const result = await refreshUploadUrls(db, req.params.sessionId, userId);
+    const result = await refreshUploadUrls(
+      db,
+      req.params.sessionId,
+      userId,
+      userEmail,
+    );
     if (!result.ok) return void sendUploadFailure(res, result);
     res.json(result.data);
   }),
@@ -189,11 +195,13 @@ uploadSessionsRouter.post(
         .json({ detail: "Invalid completion request" });
     }
     const userId = res.locals.userId as string;
+    const userEmail = res.locals.userEmail as string | undefined;
     const db = createServerSupabase();
     const result = await completeUploadSessionFile(db, {
       sessionId: req.params.sessionId,
       fileId: req.params.fileId,
       userId,
+      userEmail,
       failed: parsed.data.failed,
     });
     if (!result.ok) return void sendUploadFailure(res, result);

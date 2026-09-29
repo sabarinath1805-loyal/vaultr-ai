@@ -4,6 +4,13 @@ import { publishCellUpdate as defaultPublish, type RunProgressUpdate } from "../
 import { assistantStreamErrorPayload } from "../chat/chat.service";
 import { extractRowColumns, finalizeCell, finishGenerationIfIdle, loadReviewRow, renewGeneration, validateSelectedModel, TABULAR_GENERATION_HEARTBEAT_MS, type Column } from "./tabular.service";
 import { createServerSupabase, type Db } from "../../lib/supabase";
+import { currentAuthUserEmail } from "../../lib/userLookup";
+import {
+    assertTabularReviewEditAccess,
+    assertTabularSourceReadAccess,
+    TabularAccessRevokedError,
+} from "./tabular.authorization";
+import type { SourceDocument } from "./tabular.rows";
 
 export interface ExtractionDeps {
     db: Db;
@@ -67,6 +74,8 @@ export async function runExtractionJob(
     // review that vanished) — as opposed to throwing for a retry, where the
     // row's cells must keep their stamp so the lease stays held.
     let settled = false;
+    let columns: Column[] = [];
+    let row: Awaited<ReturnType<typeof loadReviewRow>> = null;
     try {
         // 0. Canceled by clear-cells while a previous attempt was active: the
         //    marker is persisted into the job's data, and each retry re-fetches
@@ -79,6 +88,15 @@ export async function runExtractionJob(
             return;
         }
 
+        const userEmail = await currentAuthUserEmail(db, userId);
+        const authorize = async (source?: SourceDocument | string) => {
+            await assertTabularReviewEditAccess(db, reviewId, userId, userEmail);
+            if (source) {
+                await assertTabularSourceReadAccess(db, source, userId, userEmail);
+            }
+        };
+        await authorize();
+
         // 1. Columns configured on the review. A single-cell job (regenerate)
         //    narrows to its one column; the cell was already flipped off "done"
         //    by the enqueuing route, so the shared core will re-extract it.
@@ -87,7 +105,7 @@ export async function runExtractionJob(
             .select("columns_config, model")
             .eq("id", reviewId)
             .single();
-        let columns: Column[] = (review?.columns_config as Column[]) ?? [];
+        columns = (review?.columns_config as Column[]) ?? [];
         if (columnIndex != null)
             columns = columns.filter((c) => c.index === columnIndex);
         if (columns.length === 0) {
@@ -97,13 +115,15 @@ export async function runExtractionJob(
 
         // 2. The row this job fills (with its source-document ids resolved). A
         //    row deleted between enqueue and run is not an error — nothing to do.
-        const row = await loadReviewRow(db, reviewId, rowId);
+        await authorize();
+        row = await loadReviewRow(db, reviewId, rowId);
         if (!row) {
             settled = true;
             return;
         }
 
         // 3. Current cell state for this row, keyed by column.
+        await authorize();
         const { data: cells } = await db
             .from("tabular_cells")
             .select("*")
@@ -146,6 +166,7 @@ export async function runExtractionJob(
             model: tabular_model,
             apiKeys: api_keys,
             generationId,
+            authorize,
             sink: {
                 generating: (id, columnIndex) =>
                     publish(reviewId, {
@@ -185,6 +206,28 @@ export async function runExtractionJob(
                 `[extraction-worker] incomplete extraction for row ${rowId}: ` +
                     `missing columns ${missing.join(", ")}`,
             );
+        }
+        settled = true;
+    } catch (error) {
+        if (!(error instanceof TabularAccessRevokedError)) throw error;
+        // Revocation is terminal for this user-delegated extraction. Settle
+        // only cells still stamped by this generation; never clear another
+        // worker's newer result or requeue stale authority.
+        for (const column of columns) {
+            await finalizeCell(db, {
+                reviewId,
+                rowId,
+                columnIndex: column.index,
+                status: "error",
+                generationId,
+            });
+            await publish(reviewId, {
+                type: "cell_update",
+                row_id: rowId,
+                column_index: column.index,
+                content: null,
+                status: "error",
+            });
         }
         settled = true;
     } finally {

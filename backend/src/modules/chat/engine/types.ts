@@ -16,6 +16,8 @@ export type DocStore = Map<
     filename: string;
     /** Identifies source material that must be copied before it is edited. */
     source_kind?: "document" | "library_template" | "workflow_asset";
+    /** Current container for workflow assets, rechecked when the tool reads. */
+    workflow_id?: string;
     /**
      * Request-scoped plain text that is already available in memory. Inline
      * documents still flow through read_document so their body only reaches
@@ -51,8 +53,15 @@ export type DocIndex = Record<
 >;
 
 export type TabularCellStore = {
+  /** Review scope whose captured cells must be reauthorized at tool use. */
+  reviewId: string;
   columns: { index: number; name: string }[];
-  documents: { id: string; filename: string }[];
+  documents: {
+    id: string;
+    filename: string;
+    /** Source documents whose extracted cells are held in the captured store. */
+    sourceDocumentIds: string[];
+  }[];
   /** key: `${colIndex}:${docId}` */
   cells: Map<
     string,

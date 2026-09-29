@@ -16,7 +16,12 @@ const uploadFile =
   vi.fn<(key: string, content: ArrayBuffer, contentType: string) => Promise<void>>(
     async () => {},
   );
+const deleteFilesBestEffort = vi.fn(
+  async (_keys: Array<string | null | undefined>, _context?: string) => {},
+);
 vi.mock("../../../../../lib/storage", () => ({
+  deleteFilesBestEffort: (keys: Array<string | null | undefined>, context?: string) =>
+    deleteFilesBestEffort(keys, context),
   uploadFile: (key: string, content: ArrayBuffer, contentType: string) =>
     uploadFile(key, content, contentType),
   downloadFile: vi.fn(async () => null),
@@ -48,7 +53,7 @@ vi.mock("../../../../../lib/supabase", () => ({
   createServerSupabase: vi.fn(),
 }));
 
-import { generatePpt } from "../documentOps";
+import { generateExcel, generatePpt } from "../documentOps";
 
 type Insert = { table: string; payload: Record<string, unknown> };
 
@@ -94,6 +99,7 @@ const SLIDES = [{ title: "One", bullets: ["a"] }];
 
 beforeEach(() => {
   uploadFile.mockClear();
+  deleteFilesBestEffort.mockClear();
   docxToPdf.mockClear();
   enqueueConversion.mockClear();
 });
@@ -155,12 +161,43 @@ describe("generatePpt rendition path", () => {
   it("never converts or enqueues for spreadsheets (xlsx is served raw)", async () => {
     process.env.ASYNC_DOCUMENT_CONVERSION = "true";
     const db = makeDb();
-    const { generateExcel } = await import("../documentOps.js");
-
     const out = await generateExcel("Book", [], "user-1", db as never);
 
     expect(out).not.toHaveProperty("error");
     expect(docxToPdf).not.toHaveBeenCalled();
     expect(enqueueConversion).not.toHaveBeenCalled();
+  });
+
+  it("removes private storage bytes if project access is revoked before row persistence", async () => {
+    const db = makeDb();
+    let checks = 0;
+
+    const out = await generateExcel("Book", [], "user-1", db as never, {
+      projectId: "project-1",
+      authorizeWrite: async () => ++checks === 1,
+    });
+
+    expect(out).toMatchObject({
+      error: "Project access is no longer available.",
+    });
+    expect(uploadFile).toHaveBeenCalledOnce();
+    expect(deleteFilesBestEffort).toHaveBeenCalledWith(
+      [expect.stringMatching(/^generated\/user-1\//), null],
+      "generated-document-access-revoked",
+    );
+    expect(db.inserts).toEqual([]);
+  });
+
+  it("keeps project generation available while current write access remains", async () => {
+    const db = makeDb();
+
+    const out = await generateExcel("Book", [], "user-1", db as never, {
+      projectId: "project-1",
+      authorizeWrite: async () => true,
+    });
+
+    expect(out).not.toHaveProperty("error");
+    expect(db.inserts.some((insert) => insert.table === "documents")).toBe(true);
+    expect(db.inserts.some((insert) => insert.table === "document_versions")).toBe(true);
   });
 });

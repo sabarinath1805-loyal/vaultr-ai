@@ -68,6 +68,10 @@ import {
     regenerateTabularCell,
 } from "./tabular.cells";
 import {
+    assertTabularReviewEditAccess,
+    assertTabularSourceReadAccess,
+} from "./tabular.service";
+import {
     deleteTabularReviewChat,
     extractTabularAnnotations,
     listTabularReviewChatMessages,
@@ -495,6 +499,22 @@ tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, re
             apiKeys: api_keys,
             generationId,
             abortSignal: generationAbort.signal,
+            authorize: async (source) => {
+                await assertTabularReviewEditAccess(
+                    db,
+                    reviewId,
+                    userId,
+                    userEmail ?? null,
+                );
+                if (source) {
+                    await assertTabularSourceReadAccess(
+                        db,
+                        source,
+                        userId,
+                        userEmail ?? null,
+                    );
+                }
+            },
             onError: (error) => {
                 if (sentGenerationError) return;
                 const payload = assistantStreamErrorPayload(error);
@@ -752,6 +772,7 @@ tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) =
             docStore: new Map(),
             docIndex: {},
             userId,
+            userEmail,
             db,
             write,
             extraTools: TABULAR_TOOLS,

@@ -561,10 +561,14 @@ export async function prepareTabularChat(
     ).sort((a, b) => a.index - b.index);
 
     const tabularStore: TabularCellStore = {
+        reviewId,
         columns: sortedColumns,
         documents: rows.map((row) => ({
             id: row.id,
             filename: row.label,
+            sourceDocumentIds:
+                row.source_document_ids ??
+                (row.document_id ? [row.document_id] : []),
         })),
         cells: new Map(
             (cells ?? []).map((c: any) => [

@@ -94,6 +94,45 @@ export async function insertAssistantMessage(
     return { ok: true };
 }
 
+/** Revalidate the project and chat write scopes at the assistant persistence boundary. */
+export async function hasCurrentProjectChatWriteAccess(
+    db: Db,
+    args: { chatId: string; projectId: string; userId: string; userEmail: string | undefined },
+): Promise<boolean> {
+    try {
+        const projectAccess = await checkProjectAccess(
+            args.projectId,
+            args.userId,
+            args.userEmail,
+            db,
+        );
+        if (!projectAccess.ok) return false;
+
+        const { data: chat, error } = await db
+            .from("chats")
+            .select("id, user_id, project_id, org_id")
+            .eq("id", args.chatId)
+            .maybeSingle();
+        if (error || !chat || chat.project_id !== args.projectId) return false;
+
+        const access = await ensureChatAccess(
+            chat as {
+                id: string;
+                user_id: string | null;
+                project_id: string | null;
+                org_id?: string | null;
+            },
+            args.userId,
+            args.userEmail,
+            db,
+        );
+        return access.ok && can(access.projectRole, "content.edit");
+    } catch {
+        // Persistence fails closed if current authority cannot be established.
+        return false;
+    }
+}
+
 export type PreparedProjectChatStream = {
     chatId: string;
     chatTitle: string | null;

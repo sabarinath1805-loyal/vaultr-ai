@@ -11,6 +11,7 @@ const {
   releaseMemoryConversationTurn,
   scheduleMemoryConsolidation,
   dbInserts,
+  chatTitleState,
 } = vi.hoisted(() => ({
     runLLMStream: vi.fn(),
     checkProjectAccess: vi.fn(),
@@ -26,11 +27,12 @@ const {
     generation: 1,
   }),
   dbInserts: [] as { table: string; value: unknown }[],
+  chatTitleState: { value: null as string | null },
 }));
 
 function makeQuery(table: string) {
     const result = {
-        data: { id: "chat-1", title: null, project_id: "p1" },
+        data: { id: "chat-1", title: chatTitleState.value, project_id: "p1" },
         error: null,
     };
     const q: Record<string, unknown> = {};
@@ -166,8 +168,9 @@ const VALID_BODY = {
 
 describe("POST /projects/:projectId/chat", () => {
     beforeEach(() => {
-        vi.clearAllMocks();
+    vi.clearAllMocks();
     dbInserts.length = 0;
+    chatTitleState.value = null;
         buildMessages.mockReturnValue([]);
         buildProjectDocContext.mockResolvedValue({
             docIndex: {},
@@ -755,5 +758,38 @@ describe("POST /projects/:projectId/chat", () => {
       expect.objectContaining({ projectId: "p1" }),
     );
     expect(scheduleMemoryConsolidation).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not persist an assistant result when project access is revoked before save", async () => {
+        chatTitleState.value = "Existing matter chat";
+        checkProjectAccess
+            .mockResolvedValueOnce({
+                ok: true,
+                isCreator: false,
+                orgRole: null,
+                projectRole: "editor",
+                project: { id: "p1", user_id: "u1" },
+            })
+            .mockResolvedValue({ ok: false });
+        runLLMStream.mockResolvedValue({
+            fullText: "generated while authorization was live",
+            events: [{ type: "content", text: "generated while authorization was live" }],
+            citations: [],
+        });
+
+        const res = await request(app)
+            .post("/projects/p1/chat")
+            .set("Authorization", "Bearer test")
+            .send({ ...VALID_BODY, chat_id: "chat-1" });
+
+        expect(res.status).toBe(200);
+        expect(res.text).toContain("This conversation is no longer available.");
+        expect(
+            dbInserts.filter(
+                (insert) =>
+                    insert.table === "chat_messages" &&
+                    (insert.value as { role?: string }).role === "assistant",
+            ),
+        ).toEqual([]);
     });
 });

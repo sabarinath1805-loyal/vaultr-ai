@@ -41,7 +41,7 @@ import {
 } from "../../lib/queue/runProgress";
 import { type UserApiKeys } from "../../lib/llm";
 import { extractRowColumns, finalizeCell } from "./tabular.extractRow";
-import { type ReviewRow } from "./tabular.rows";
+import { type ReviewRow, type SourceDocument } from "./tabular.rows";
 import {
     finishGeneration,
     parseCellContent,
@@ -576,6 +576,7 @@ export async function streamTabularGenerateSync(args: {
     apiKeys: UserApiKeys;
     generationId: string;
     abortSignal: AbortSignal;
+    authorize?: (source?: SourceDocument | string) => Promise<void>;
     onError?: (error: unknown) => void;
 }): Promise<boolean> {
     const {
@@ -589,6 +590,7 @@ export async function streamTabularGenerateSync(args: {
         apiKeys,
         generationId,
         abortSignal,
+        authorize,
         onError,
     } = args;
 
@@ -637,6 +639,7 @@ export async function streamTabularGenerateSync(args: {
             apiKeys,
             generationId,
             abortSignal,
+            authorize,
             sink: {
                 generating: (rowId, columnIndex) =>
                     cellFrame(rowId, columnIndex, null, "generating"),

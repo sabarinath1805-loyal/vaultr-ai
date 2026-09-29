@@ -42,6 +42,7 @@ import {
   type UploadSessionFileRow,
   type UploadSessionRow,
 } from "./uploads.shared";
+import { validatePersistedUploadDestination } from "./uploads.access";
 
 // ---------------------------------------------------------------------------
 // Row loading
@@ -449,6 +450,7 @@ export async function refreshUploadUrls(
   db: Db,
   sessionId: string,
   userId: string,
+  userEmail?: string,
 ): Promise<UploadResult<Record<string, unknown>>> {
   const session = await loadOwnedSession(db, sessionId, userId);
   if (!session) return failure(404, { detail: "Upload session not found" });
@@ -470,6 +472,18 @@ export async function refreshUploadUrls(
   const pendingFiles = files.filter((file) =>
     ["pending_upload", "verifying"].includes(file.status),
   );
+  // A session belongs to its creator, but that does not preserve the
+  // project's authority needed to mint a fresh storage capability. Validate
+  // every file before changing state or issuing any new signed URLs.
+  for (const file of pendingFiles) {
+    const access = await validatePersistedUploadDestination(
+      session,
+      file,
+      userEmail,
+      db,
+    );
+    if (!access.ok) return access;
+  }
   if (pendingFiles.some((file) => file.status === "pending_upload")) {
     const { error } = await db
       .from("upload_session_files")
@@ -515,10 +529,11 @@ export async function completeUploadSessionFile(
     sessionId: string;
     fileId: string;
     userId: string;
+    userEmail?: string;
     failed: boolean;
   },
 ): Promise<UploadResult<{ status: number; body: Record<string, unknown> }>> {
-  const { sessionId, fileId, userId, failed } = args;
+  const { sessionId, fileId, userId, userEmail, failed } = args;
   const session = await loadOwnedSession(db, sessionId, userId);
   if (!session) return failure(404, { detail: "Upload session not found" });
   if (["cancelled", "expired"].includes(session.status)) {
@@ -538,6 +553,14 @@ export async function completeUploadSessionFile(
   const files = await loadSessionFiles(db, session.id);
   const file = files.find((candidate) => candidate.id === fileId);
   if (!file) return failure(404, { detail: "Upload file not found" });
+
+  const access = await validatePersistedUploadDestination(
+    session,
+    file,
+    userEmail,
+    db,
+  );
+  if (!access.ok) return access;
 
   try {
     const result = await completeSessionFile(db, session, file, userId, failed);

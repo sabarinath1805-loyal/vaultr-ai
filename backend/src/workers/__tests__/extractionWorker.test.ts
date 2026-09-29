@@ -5,6 +5,18 @@ vi.mock("../../lib/supabase", () => ({
     createServerSupabase: vi.fn(),
 }));
 
+const authorization = vi.hoisted(() => ({
+    currentAuthUserEmail: vi.fn(),
+    ensureReviewAccess: vi.fn(),
+}));
+vi.mock("../../lib/userLookup", () => ({
+    currentAuthUserEmail: authorization.currentAuthUserEmail,
+}));
+vi.mock("../../lib/access", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../lib/access")>()),
+    ensureReviewAccess: authorization.ensureReviewAccess,
+}));
+
 const loadReviewRow = vi.fn();
 const loadRowDocumentText = vi.fn();
 vi.mock("../../modules/tabular/tabular.rows", () => ({
@@ -93,6 +105,10 @@ function makeDb(responses: Record<string, { select?: SelectResponse }>) {
                 calls.push({ ...state, filters: { ...state.filters } });
                 return Promise.resolve(resolveRead());
             },
+            maybeSingle() {
+                calls.push({ ...state, filters: { ...state.filters } });
+                return Promise.resolve(resolveRead());
+            },
             then(onF: (v: unknown) => unknown, onR?: (e: unknown) => unknown) {
                 calls.push({ ...state, filters: { ...state.filters } });
                 const value =
@@ -142,6 +158,11 @@ const CELL = (index: number, result: Record<string, unknown>) => ({
 });
 
 beforeEach(() => {
+    authorization.currentAuthUserEmail.mockResolvedValue("user-1@example.com");
+    authorization.ensureReviewAccess.mockResolvedValue({
+        ok: true,
+        projectRole: "owner",
+    });
     loadReviewRow.mockReset();
     loadReviewRow.mockResolvedValue(ROW);
     loadRowDocumentText.mockReset();

@@ -41,6 +41,11 @@ import {
   versionStorageKey,
 } from "../../lib/storage";
 import { createServerSupabase, type Db } from "../../lib/supabase";
+import { currentAuthUserEmail } from "../../lib/userLookup";
+import {
+  UploadAuthorizationRevokedError,
+  assertPersistedUploadDestination,
+} from "./uploads.access";
 import {
   UPLOAD_URL_TTL_SECONDS,
   UPLOAD_VERIFICATION_LEASE_SECONDS,
@@ -69,6 +74,7 @@ type UploadFileRow = {
   file_type: string;
   content_type: string;
   expected_size_bytes: number;
+  staging_storage_path: string;
   sealed_storage_path: string;
   target_folder_id: string | null;
   status: string;
@@ -104,6 +110,7 @@ const TERMINAL_UPLOAD_ERROR_CODES = new Set([
   // The destination document no longer exists. Retrying cannot make it exist
   // again — it can only put it back, which is the bug this code prevents.
   "document_deleted",
+  "authorization_revoked",
 ]);
 
 /**
@@ -304,7 +311,9 @@ async function processCreatedDocument(
   session: UploadSessionRow,
   file: UploadFileRow,
   artifact: SealedFileArtifact,
+  assertDestinationAccess: () => Promise<void>,
 ) {
+  await assertDestinationAccess();
   const destination = session.destination;
   const scope = destination.scope as
     | "standalone"
@@ -376,6 +385,11 @@ async function processCreatedDocument(
         convertedPdfKey(session.user_id, documentId),
       ]);
   }
+
+  // This upsert creates the user-visible destination row and is the upload's
+  // acceptance boundary. Later conversion/version completion is lifecycle
+  // work and may finish after access changes.
+  await assertDestinationAccess();
 
   const { error: documentError } = await db.from("documents").upsert(
     {
@@ -483,6 +497,7 @@ async function processNewDocumentVersion(
   session: UploadSessionRow,
   file: UploadFileRow,
   artifact: SealedFileArtifact,
+  assertDestinationAccess: () => Promise<void>,
 ) {
   const documentId = session.destination.document_id as string;
   const versionId = file.resource_id;
@@ -496,6 +511,7 @@ async function processNewDocumentVersion(
     versionSlug,
     file.filename,
   );
+  await assertDestinationAccess();
   await copyFile(file.sealed_storage_path, sourcePath);
   const pdfPath = await buildPdfRendition({
     sourceFilePath: artifact.filePath,
@@ -508,6 +524,18 @@ async function processNewDocumentVersion(
   });
   const pageCount =
     file.file_type === "pdf" ? await countPdfPages(artifact.filePath) : null;
+
+  // A new version is not accepted until its durable version row is created.
+  // If a retry lost access after copying, its unreferenced objects are handed
+  // to the reference-checked storage cleanup path.
+  try {
+    await assertDestinationAccess();
+  } catch (error) {
+    if (error instanceof UploadAuthorizationRevokedError) {
+      error.orphanedKeys.push(sourcePath, ...(pdfPath ? [pdfPath] : []));
+    }
+    throw error;
+  }
 
   const { data: version, error } = await createDocumentVersion(db, {
     id: versionId,
@@ -556,9 +584,11 @@ async function processReplacementDocumentVersion(
   session: UploadSessionRow,
   file: UploadFileRow,
   artifact: SealedFileArtifact,
+  assertDestinationAccess: () => Promise<void>,
 ) {
   const documentId = session.destination.document_id as string;
   const versionId = session.destination.version_id as string;
+  await assertDestinationAccess();
   const { data: current, error: currentError } = await db
     .from("document_versions")
     .select(
@@ -579,6 +609,7 @@ async function processReplacementDocumentVersion(
     versionSlug,
     file.filename,
   );
+  await assertDestinationAccess();
   await copyFile(file.sealed_storage_path, sourcePath);
   const pdfPath = await buildPdfRendition({
     sourceFilePath: artifact.filePath,
@@ -591,6 +622,14 @@ async function processReplacementDocumentVersion(
   });
   const pageCount =
     file.file_type === "pdf" ? await countPdfPages(artifact.filePath) : null;
+  try {
+    await assertDestinationAccess();
+  } catch (error) {
+    if (error instanceof UploadAuthorizationRevokedError) {
+      error.orphanedKeys.push(sourcePath, ...(pdfPath ? [pdfPath] : []));
+    }
+    throw error;
+  }
   const { data: updated, error } = await updateDocumentVersion(
     db,
     documentId,
@@ -677,20 +716,37 @@ export async function processUploadFile(
   db: Db,
   session: UploadSessionRow,
   file: UploadFileRow,
+  assertDestinationAccess: () => Promise<void>,
 ) {
+  // Do not even read sealed bytes into the parser pipeline after a revoked
+  // user-delegated destination loses authority.
+  await assertDestinationAccess();
   const artifact = await requireSealedFile(file);
   try {
     switch (session.purpose) {
       case "document_create":
-        return await processCreatedDocument(db, session, file, artifact);
+        return await processCreatedDocument(
+          db,
+          session,
+          file,
+          artifact,
+          assertDestinationAccess,
+        );
       case "document_version_create":
-        return await processNewDocumentVersion(db, session, file, artifact);
+        return await processNewDocumentVersion(
+          db,
+          session,
+          file,
+          artifact,
+          assertDestinationAccess,
+        );
       case "document_version_replace":
         return await processReplacementDocumentVersion(
           db,
           session,
           file,
           artifact,
+          assertDestinationAccess,
         );
       case "workflow_reference_create":
         // Complete upload sessions created by the previous release using the
@@ -707,6 +763,7 @@ export async function processUploadFile(
           },
           file,
           artifact,
+          assertDestinationAccess,
         );
       case "workflow_reference_replace":
         // A former replacement is retained as a new version so history is not
@@ -723,11 +780,66 @@ export async function processUploadFile(
           },
           file,
           artifact,
+          assertDestinationAccess,
         );
     }
   } finally {
     await removeTemporaryArtifact(artifact.directory);
   }
+}
+
+/** Whether this session file already crossed its durable promotion boundary. */
+/** @internal Exposed for deterministic lifecycle-boundary regression tests. */
+export async function uploadAlreadyAccepted(
+  db: Db,
+  session: UploadSessionRow,
+  file: UploadFileRow,
+): Promise<boolean> {
+  if (
+    (session.purpose === "document_create" ||
+      session.purpose === "workflow_reference_create")
+  ) {
+    if (file.document_created_at) return true;
+    // The acceptance boundary is the durable destination row. The marker is
+    // normally stamped immediately afterward, but a transient marker-write
+    // failure must not make a row already created by this job dependent on
+    // the uploader's still-current membership during its lifecycle retry.
+    const { data, error } = await db
+      .from("documents")
+      .select("id")
+      .eq("id", file.resource_id)
+      .maybeSingle();
+    if (error && (error as { code?: string }).code !== "PGRST116") throw error;
+    return !!data;
+  }
+
+  const documentId =
+    session.purpose === "workflow_reference_replace"
+      ? (session.destination.reference_id as string)
+      : (session.destination.document_id as string | undefined);
+  if (!documentId) return false;
+
+  const versionId =
+    session.purpose === "document_version_replace"
+      ? (session.destination.version_id as string)
+      : file.resource_id;
+  const expectedPath =
+    session.purpose === "document_version_replace"
+      ? replacementArtifactKeys(session, file)[0]
+      : versionStorageKey(
+          session.user_id,
+          documentId,
+          versionId.replace(/-/g, ""),
+          file.filename,
+        );
+  const { data, error } = await db
+    .from("document_versions")
+    .select("storage_path")
+    .eq("id", versionId)
+    .eq("document_id", documentId)
+    .maybeSingle();
+  if (error && (error as { code?: string }).code !== "PGRST116") throw error;
+  return !!data && (data as { storage_path?: string }).storage_path === expectedPath;
 }
 
 async function heartbeatJob(db: Db, jobId: string, workerId: string) {
@@ -830,6 +942,27 @@ export async function processUploadJob(
     file.status === "error" &&
     !!file.error_code &&
     TERMINAL_UPLOAD_ERROR_CODES.has(file.error_code);
+  let accessResolved = false;
+  let acceptedBeforeAttempt = false;
+  let currentUserEmail: string | null = null;
+  const assertDestinationAccess = async () => {
+    if (!accessResolved) {
+      acceptedBeforeAttempt = await uploadAlreadyAccepted(
+        db,
+        typedSession,
+        file,
+      );
+      currentUserEmail = await currentAuthUserEmail(db, typedSession.user_id);
+      accessResolved = true;
+    }
+    if (acceptedBeforeAttempt) return;
+    await assertPersistedUploadDestination(
+      typedSession,
+      file,
+      currentUserEmail ?? undefined,
+      db,
+    );
+  };
 
   const startedAt = Date.now();
   const wallClockMs = uploadJobWallClockMs();
@@ -854,6 +987,7 @@ export async function processUploadJob(
 
   let failed = false;
   let documentDeleted = false;
+  let authorizationRevoked = false;
   try {
     if (file.status !== "completed" && !terminalUploadFailure) {
       await heartbeatJob(db, jobId, workerId);
@@ -870,7 +1004,12 @@ export async function processUploadJob(
 
       let result: unknown;
       try {
-        result = await processUploadFile(db, typedSession, file);
+        result = await processUploadFile(
+          db,
+          typedSession,
+          file,
+          assertDestinationAccess,
+        );
       } catch (error) {
         // A failed timer heartbeat makes ownership uncertain. Re-prove the
         // lease before recording even a failure result.
@@ -878,6 +1017,7 @@ export async function processUploadJob(
         failed = true;
         // A deleted destination is the one failure a retry makes WORSE.
         documentDeleted = error instanceof DeletedDocumentError;
+        authorizationRevoked = error instanceof UploadAuthorizationRevokedError;
         reportError(error, {
           tags: {
             component: "upload-worker",
@@ -903,6 +1043,8 @@ export async function processUploadJob(
             status: "error",
             error_code: documentDeleted
               ? "document_deleted"
+              : authorizationRevoked
+                ? "authorization_revoked"
               : "processing_failed",
             updated_at: new Date().toISOString(),
           })
@@ -912,6 +1054,12 @@ export async function processUploadJob(
         if (error instanceof DeletedDocumentError) {
           // Durable, best-effort: these objects have no row pointing at them
           // any more, so this job is the last place that knows their keys.
+          await enqueueStorageCleanup(db, error.orphanedKeys);
+        }
+        if (
+          error instanceof UploadAuthorizationRevokedError &&
+          error.orphanedKeys.length > 0
+        ) {
           await enqueueStorageCleanup(db, error.orphanedKeys);
         }
         await markCreatedDocumentFailed(db, typedSession, file);
@@ -948,6 +1096,7 @@ export async function processUploadJob(
   if (
     failed &&
     !documentDeleted &&
+    !authorizationRevoked &&
     typedJob.attempts < UPLOAD_JOB_MAX_ATTEMPTS
   ) {
     const retryAt = new Date(
