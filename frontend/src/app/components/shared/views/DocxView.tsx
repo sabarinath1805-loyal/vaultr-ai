@@ -9,6 +9,7 @@ import {
     clearDocxQuoteHighlights,
     highlightDocxQuote,
 } from "./highlightDocxQuote";
+import { sanitizeDocxLinks } from "./docxLinkSecurity";
 import type { CitationQuote } from "../types";
 
 interface Props {
@@ -361,6 +362,7 @@ export function DocxView({
                     renderChanges: true,
                     experimental: true,
                 });
+                sanitizeDocxLinks(containerEl, document.baseURI);
                 if (cancelled) return;
                 await tagWIdsOnRenderedDom(
                     containerEl,

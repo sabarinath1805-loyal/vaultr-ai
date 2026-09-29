@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { diagnosticErrorTags } from "../../../lib/observability/sentryPrivacy";
+import { UPLOAD_URL_TTL_SECONDS } from "../uploads.manifest";
 
 const mocks = vi.hoisted(() => ({
   deleteFile: vi.fn(),
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   uploadFileFromPath: vi.fn(),
   createServerSupabase: vi.fn(),
   enqueueStorageCleanup: vi.fn(),
+  enqueueDbJob: vi.fn(),
   requestDocumentCleanupDelivery: vi.fn(),
   reportError: vi.fn((_error: unknown, _context?: unknown) => null),
 }));
@@ -57,6 +59,7 @@ vi.mock("../../../lib/convert", async (importOriginal) => {
 
 vi.mock("../../../lib/audit", () => ({ recordAudit: mocks.recordAudit }));
 vi.mock("../../../lib/dbq/enqueue", () => ({
+  enqueueDbJob: mocks.enqueueDbJob,
   enqueueStorageCleanup: mocks.enqueueStorageCleanup,
   requestDocumentCleanupDelivery: mocks.requestDocumentCleanupDelivery,
 }));
@@ -142,6 +145,7 @@ function scriptedDb(results: QueryResult[]) {
     table: string;
     operation?: string;
     payload?: unknown;
+    filters?: Array<[string, string, unknown]>;
   }> = [];
   const next = () =>
     Promise.resolve(results.shift() ?? { data: null, error: null });
@@ -175,29 +179,34 @@ function scriptedDb(results: QueryResult[]) {
       this.call.operation = "delete";
       return this;
     }
-    eq() {
+    private filter(operation: string, column: string, value: unknown) {
+      this.call.filters ??= [];
+      this.call.filters.push([operation, column, value]);
       return this;
     }
-    is() {
-      return this;
+    eq(column: string, value: unknown) {
+      return this.filter("eq", column, value);
     }
-    in() {
-      return this;
+    is(column: string, value: unknown) {
+      return this.filter("is", column, value);
     }
-    not() {
-      return this;
+    in(column: string, value: unknown) {
+      return this.filter("in", column, value);
     }
-    lt() {
-      return this;
+    not(column: string, operator: unknown, value: unknown) {
+      return this.filter("not", column, [operator, value]);
     }
-    gte() {
-      return this;
+    lt(column: string, value: unknown) {
+      return this.filter("lt", column, value);
     }
-    order() {
-      return this;
+    gte(column: string, value: unknown) {
+      return this.filter("gte", column, value);
     }
-    limit() {
-      return this;
+    order(column: string, options: unknown) {
+      return this.filter("order", column, options);
+    }
+    limit(value: number) {
+      return this.filter("limit", "", value);
     }
     single() {
       return next();
@@ -267,6 +276,7 @@ describe("upload processing", () => {
     mocks.deleteFile.mockResolvedValue(undefined);
     mocks.recordAudit.mockResolvedValue(undefined);
     mocks.enqueueStorageCleanup.mockResolvedValue(undefined);
+    mocks.enqueueDbJob.mockResolvedValue({ id: "cleanup-job", deduped: false });
     mocks.requestDocumentCleanupDelivery.mockResolvedValue(0);
   });
 
@@ -691,6 +701,80 @@ describe("upload processing", () => {
     );
   });
 
+  it("queues reference-checked replacement cleanup after the last retry", async () => {
+    const documentId = "66666666-6666-4666-8666-666666666666";
+    const versionId = "55555555-5555-4555-8555-555555555555";
+    const replacementSession = {
+      ...baseSession,
+      purpose: "document_version_replace" as const,
+      destination: { document_id: documentId, version_id: versionId },
+    };
+    const replacementFile = {
+      ...baseFile,
+      filename: "replacement.pdf",
+      resource_id: "33333333-3333-4333-8333-333333333333",
+    };
+    const db = scriptedDb([
+      {
+        data: {
+          id: "job-1",
+          session_id: replacementSession.id,
+          file_id: replacementFile.id,
+          attempts: 3,
+          locked_by: "worker-1",
+        },
+        error: null,
+      },
+      { data: replacementSession, error: null },
+      { data: replacementFile, error: null },
+      { data: { id: "job-1" }, error: null },
+      { error: null },
+      { data: null, error: { code: "PGRST116", message: "no rows" } },
+      { data: { id: "job-1" }, error: null },
+      { error: null },
+      { data: { id: "job-1" }, error: null },
+      { data: [], error: null },
+      { data: { id: "job-1" }, error: null },
+    ]);
+
+    await processUploadJob(db as never, "job-1", "worker-1");
+
+    const key =
+      "documents/" +
+      replacementSession.user_id +
+      "/" +
+      documentId +
+      "/versions/" +
+      replacementFile.resource_id.replace(/-/g, "") +
+      ".pdf";
+    expect(mocks.enqueueDbJob).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        kind: "document.cleanup",
+        payload: { keys: [key] },
+        dedupeKey: "upload-replacement-cleanup:" + replacementFile.id,
+        maxAttempts: 8,
+      }),
+    );
+    expect(mocks.enqueueStorageCleanup).not.toHaveBeenCalledWith(
+      db,
+      expect.arrayContaining([key]),
+    );
+    expect(db.calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          table: "upload_processing_jobs",
+          operation: "update",
+          payload: expect.objectContaining({
+            status: "completed",
+            error_code: "partial_failure",
+          }),
+        }),
+      ]),
+    );
+    expect(db.remaining).toHaveLength(0);
+  });
+
   it("stops before processing when the database lease has been lost", async () => {
     const db = scriptedDb([
       {
@@ -788,6 +872,7 @@ describe("upload processing", () => {
         error: null,
       },
       { error: null },
+      { data: [], error: null },
       { data: [{ id: "old-session" }], error: null },
       { error: null },
     ]);
@@ -810,5 +895,182 @@ describe("upload processing", () => {
       ]),
     );
     expect(db.remaining).toHaveLength(0);
+  });
+
+  it("reconciles only staging keys after the signed-URL grace window", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-10-01T00:00:00.000Z");
+    vi.setSystemTime(now);
+    const db = scriptedDb([
+      { error: null },
+      { error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: [{ id: "terminal-completed-session" }], error: null },
+      {
+        data: [
+          {
+            staging_storage_path: "upload-sessions/user/session/staging",
+            sealed_storage_path: "upload-sessions/user/session/sealed",
+          },
+        ],
+        error: null,
+      },
+      { error: null },
+      { data: [], error: null },
+    ]);
+
+    try {
+      await cleanupUploadSessions(db as never);
+
+      expect(mocks.deleteFile).toHaveBeenCalledExactlyOnceWith(
+        "upload-sessions/user/session/staging",
+      );
+      const reconciliationQuery = db.calls.find(
+        (call) =>
+          call.table === "upload_sessions" &&
+          call.operation === "select" &&
+          call.filters?.some(
+            ([operation, column]) =>
+              operation === "is" && column === "staging_reconciled_at",
+          ),
+      );
+      expect(reconciliationQuery?.filters).toEqual(
+        expect.arrayContaining([
+          ["is", "staging_reconciled_at", null],
+          [
+            "lt",
+            "expires_at",
+            new Date(now.getTime() - UPLOAD_URL_TTL_SECONDS * 1000).toISOString(),
+          ],
+          ["limit", "", 10],
+        ]),
+      );
+      expect(db.calls).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            table: "upload_sessions",
+            operation: "update",
+            payload: expect.objectContaining({
+              staging_reconciled_at: expect.any(String),
+            }),
+          }),
+        ]),
+      );
+      expect(db.remaining).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not reconcile a terminal session whose expiry is inside the grace window", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-10-01T00:00:00.000Z");
+    vi.setSystemTime(now);
+    const db = scriptedDb([
+      { error: null },
+      { error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+    ]);
+
+    try {
+      await cleanupUploadSessions(db as never);
+      expect(mocks.deleteFile).not.toHaveBeenCalled();
+      const reconciliationQuery = db.calls.find(
+        (call) =>
+          call.table === "upload_sessions" &&
+          call.operation === "select" &&
+          call.filters?.some(
+            ([operation, column]) =>
+              operation === "is" && column === "staging_reconciled_at",
+          ),
+      );
+      expect(reconciliationQuery?.filters).toEqual(
+        expect.arrayContaining([
+          [
+            "lt",
+            "expires_at",
+            new Date(now.getTime() - UPLOAD_URL_TTL_SECONDS * 1000).toISOString(),
+          ],
+        ]),
+      );
+      expect(db.remaining).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps in-flight finalization sessions out of staging reconciliation", async () => {
+    const db = scriptedDb([
+      { error: null },
+      { error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+    ]);
+
+    await cleanupUploadSessions(db as never);
+
+    expect(mocks.deleteFile).not.toHaveBeenCalled();
+    const reconciliationQuery = db.calls.find(
+      (call) =>
+        call.table === "upload_sessions" &&
+        call.operation === "select" &&
+        call.filters?.some(
+          ([operation, column]) =>
+            operation === "is" && column === "staging_reconciled_at",
+        ),
+    );
+    expect(reconciliationQuery?.filters).toContainEqual([
+      "in",
+      "status",
+      ["completed", "expired", "cancelled", "error"],
+    ]);
+    expect(reconciliationQuery?.filters).not.toContainEqual([
+      "in",
+      "status",
+      expect.arrayContaining(["verifying", "pending_upload"]),
+    ]);
+    expect(db.remaining).toHaveLength(0);
+  });
+
+  it("leaves reconciliation pending when a replayed staging object cannot be deleted", async () => {
+    const db = scriptedDb([
+      { error: null },
+      { error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: [{ id: "terminal-session" }], error: null },
+      {
+        data: [{ staging_storage_path: "replayed-stage" }],
+        error: null,
+      },
+      { data: [], error: null },
+    ]);
+    mocks.deleteFile.mockRejectedValueOnce(new Error("storage unavailable"));
+
+    await expect(cleanupUploadSessions(db as never)).rejects.toThrow(
+      "upload_staging_reconciliation_failed",
+    );
+
+    expect(
+      db.calls.some(
+        (call) =>
+          call.table === "upload_sessions" &&
+          call.operation === "update" &&
+          "staging_reconciled_at" in ((call.payload as object) ?? {}),
+      ),
+    ).toBe(false);
+    expect(mocks.reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        tags: expect.objectContaining({ stage: "staging-reconcile" }),
+      }),
+    );
+    expect(db.remaining).toHaveLength(1);
   });
 });

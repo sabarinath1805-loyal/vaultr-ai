@@ -790,6 +790,7 @@ create table if not exists public.upload_sessions (
   cancelled_at timestamptz,
   error_code text,
   cleaned_at timestamptz,
+  staging_reconciled_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   user_email text,
@@ -848,6 +849,12 @@ revoke all on function public.capture_upload_session_user_email()
 
 create index if not exists upload_sessions_user_created_idx
   on public.upload_sessions(user_id, created_at desc);
+
+create index if not exists upload_sessions_staging_reconcile_idx
+  on public.upload_sessions(expires_at)
+  where cleaned_at is not null
+    and staging_reconciled_at is null
+    and status in ('completed', 'expired', 'cancelled', 'error');
 
 drop index if exists public.upload_sessions_active_idx;
 create index upload_sessions_active_idx

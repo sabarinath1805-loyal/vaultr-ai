@@ -1,5 +1,6 @@
 import {
   createDocumentVersion,
+  handleDocumentCleanup,
   updateDocumentVersion,
 } from "../documents/documents.service";
 // Background processing for sealed upload-session files.
@@ -23,7 +24,7 @@ import { pathToFileURL } from "node:url";
 
 import { resolveContentOrgId } from "../../lib/access";
 import { recordAudit } from "../../lib/audit";
-import { enqueueStorageCleanup } from "../../lib/dbq/enqueue";
+import { enqueueDbJob, enqueueStorageCleanup } from "../../lib/dbq/enqueue";
 import { convertedPdfKey, officeFileToPdf } from "../../lib/convert";
 import { reportError } from "../../lib/observability/sentry";
 import { shouldConvertToPdf } from "../../lib/documentTypes";
@@ -40,7 +41,10 @@ import {
   versionStorageKey,
 } from "../../lib/storage";
 import { createServerSupabase, type Db } from "../../lib/supabase";
-import { UPLOAD_VERIFICATION_LEASE_SECONDS } from "./uploads.manifest";
+import {
+  UPLOAD_URL_TTL_SECONDS,
+  UPLOAD_VERIFICATION_LEASE_SECONDS,
+} from "./uploads.manifest";
 
 type UploadSessionRow = {
   id: string;
@@ -91,6 +95,8 @@ const UPLOAD_WORKER_POLL_MS = 1_000;
 const UPLOAD_WORKER_HEARTBEAT_MS = 60_000;
 const UPLOAD_SESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const UPLOAD_TEMP_RETENTION_MS = 2 * UPLOAD_JOB_LEASE_SECONDS * 1000;
+const UPLOAD_STAGING_REPLAY_GRACE_MS = UPLOAD_URL_TTL_SECONDS * 1000;
+const UPLOAD_STAGING_RECONCILE_BATCH_SIZE = 10;
 const TERMINAL_UPLOAD_ERROR_CODES = new Set([
   "direct_upload_failed",
   "size_mismatch",
@@ -606,6 +612,67 @@ async function processReplacementDocumentVersion(
   return updated;
 }
 
+function replacementArtifactKeys(
+  session: UploadSessionRow,
+  file: UploadFileRow,
+): string[] {
+  const documentId = session.destination.document_id as string;
+  const versionSlug = file.resource_id.replace(/-/g, "");
+  const sourcePath = versionStorageKey(
+    session.user_id,
+    documentId,
+    versionSlug,
+    file.filename,
+  );
+  const pdfPath =
+    file.file_type === "pdf"
+      ? sourcePath
+      : shouldConvertToPdf(file.file_type)
+        ? `converted-pdfs/${session.user_id}/${documentId}/${versionSlug}.pdf`
+        : null;
+  return [...new Set([sourcePath, pdfPath].filter((key): key is string => !!key))];
+}
+
+async function cleanFailedReplacementArtifacts(
+  db: Db,
+  session: UploadSessionRow,
+  file: UploadFileRow,
+  jobId: string,
+): Promise<void> {
+  const keys = replacementArtifactKeys(session, file);
+  if (keys.length === 0) return;
+  const payload = { keys };
+
+  // Workers-disabled deployments still need the same reference check, but
+  // have no durable queue consumer to perform the cleanup later.
+  if (process.env.DB_JOBS_ENABLED === "false") {
+    await handleDocumentCleanup(db, { payload });
+    return;
+  }
+
+  try {
+    await enqueueDbJob(db, {
+      kind: "document.cleanup",
+      payload,
+      dedupeKey: `upload-replacement-cleanup:${file.id}`,
+      maxAttempts: 8,
+    });
+  } catch (error) {
+    // The durable job is preferred. If the database could not accept it,
+    // attempt the same fail-closed reference check inline. If that also fails,
+    // let the upload job fail visibly instead of declaring cleanup complete.
+    reportError(error, {
+      level: "warning",
+      tags: {
+        component: "upload-worker",
+        stage: "replacement-cleanup-enqueue",
+      },
+      extra: { job_id: jobId, session_id: session.id, file_id: file.id },
+    });
+    await handleDocumentCleanup(db, { payload });
+  }
+}
+
 export async function processUploadFile(
   db: Db,
   session: UploadSessionRow,
@@ -922,6 +989,18 @@ export async function processUploadJob(
   const partialFailure = failed || terminalUploadFailure;
   if (partialFailure) {
     if (failed) await removeFailedCreatedDocument(db, typedSession, file);
+    if (
+      failed &&
+      typedSession.purpose === "document_version_replace" &&
+      typedJob.attempts >= UPLOAD_JOB_MAX_ATTEMPTS
+    ) {
+      await cleanFailedReplacementArtifacts(
+        db,
+        typedSession,
+        file,
+        jobId,
+      );
+    }
     const { data: failedFiles } = await db
       .from("upload_session_files")
       .select("sealed_storage_path")
@@ -1049,6 +1128,73 @@ export async function cleanupUploadSessions(db: Db): Promise<void> {
       .eq("id", session.id)
       .is("cleaned_at", null);
     if (error) throw error;
+  }
+
+  // S3-style signed PUTs remain replayable until their own expiry. A terminal
+  // session's initial cleanup may run before that URL expires, so revisit
+  // only its staging keys after the session expiry plus one URL-TTL grace.
+  // Sealed and finalized objects are deliberately outside this pass.
+  const stagingCutoff = new Date(
+    now.getTime() - UPLOAD_STAGING_REPLAY_GRACE_MS,
+  ).toISOString();
+  const { data: stagingSessions, error: stagingSessionsError } = await db
+    .from("upload_sessions")
+    .select("id")
+    .in("status", ["completed", "expired", "cancelled", "error"])
+    .not("cleaned_at", "is", null)
+    .is("staging_reconciled_at", null)
+    .lt("expires_at", stagingCutoff)
+    .order("expires_at", { ascending: true })
+    .limit(UPLOAD_STAGING_RECONCILE_BATCH_SIZE);
+  if (stagingSessionsError) throw stagingSessionsError;
+
+  let stagingReconcileFailures = 0;
+  for (const session of stagingSessions ?? []) {
+    try {
+      const { data: files, error: filesError } = await db
+        .from("upload_session_files")
+        .select("staging_storage_path")
+        .eq("session_id", session.id);
+      if (filesError) throw filesError;
+
+      let deleteError: unknown;
+      for (const file of files ?? []) {
+        if (typeof file.staging_storage_path !== "string") continue;
+        try {
+          await deleteFile(file.staging_storage_path);
+        } catch (error) {
+          deleteError ??= error;
+        }
+      }
+      if (deleteError) throw deleteError;
+
+      const { error } = await db
+        .from("upload_sessions")
+        .update({
+          staging_reconciled_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", session.id)
+        .is("staging_reconciled_at", null);
+      if (error) throw error;
+    } catch (error) {
+      stagingReconcileFailures += 1;
+      reportError(error, {
+        level: "warning",
+        tags: {
+          component: "upload-worker",
+          stage: "staging-reconcile",
+        },
+        extra: { session_id: session.id },
+      });
+      console.error("[upload-worker] staging reconciliation failed", {
+        sessionId: session.id,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
+    }
+  }
+  if (stagingReconcileFailures > 0) {
+    throw new Error("upload_staging_reconciliation_failed");
   }
 
   const retentionCutoff = new Date(
