@@ -327,6 +327,30 @@ describe("auth routes", () => {
     expect(response.text).toBe("");
   });
 
+  it("returns the same reset response for existing and unknown email addresses", async () => {
+    authClient.auth.resetPasswordForEmail.mockImplementation(
+      async (email: string) =>
+        email === "known@example.test"
+          ? { data: {}, error: null }
+          : { data: {}, error: new Error("account not found") },
+    );
+
+    const known = await request(app)
+      .post("/auth/password-reset")
+      .set("Origin", origin)
+      .send({ email: "known@example.test" });
+    const unknown = await request(app)
+      .post("/auth/password-reset")
+      .set("Origin", origin)
+      .send({ email: "unknown@example.test" });
+
+    expect(known.status).toBe(204);
+    expect(unknown.status).toBe(known.status);
+    expect(unknown.text).toBe(known.text);
+    expect(unknown.headers["content-type"]).toBe(known.headers["content-type"]);
+    expect(unknown.headers["set-cookie"]).toBe(known.headers["set-cookie"]);
+  });
+
   it("always clears local cookies during logout", async () => {
     authClient.auth.signOut.mockRejectedValue(
       new Error("upstream unavailable"),

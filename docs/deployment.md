@@ -520,16 +520,23 @@ database queue even when `REDIS_URL` is set.
 
 Authenticated request budgets are keyed by user identity, with generous
 source-IP backstops for shared offices. When `REDIS_URL` is configured, the API
-uses the existing Redis connection for atomic, expiring rate-limit counters
-across API instances; this remains true when `QUEUE_DRIVER=postgres` is set.
-Without Redis, counters use a bounded in-process store and reset when the API
-restarts. Production boot logs a warning in that mode: run one API process or
-configure `REDIS_URL` before serving multiple API instances. Authentication,
-chat, upload, export, and other cost-sensitive limits return a sanitized 503
-with `Retry-After` if their counter store is unavailable. The coarse general
-IP backstop may allow a request through on store failure; protected routes
-still apply their fail-closed user budget. Per-user and IP caps are separately
-configurable with the `RATE_LIMIT_*` variables in `backend/.env.example`.
+uses a dedicated Redis connection for atomic, expiring counters across API
+instances; this remains true when `QUEUE_DRIVER=postgres` is set. The limiter
+connection has a short command timeout and a process-wide circuit breaker. A
+Redis operation failure is served from the bounded in-process counter store;
+after the configured cooldown one request probes Redis and successful recovery
+switches back automatically. Counter values are not copied between Redis and
+memory, so limits are process-local while Redis is unavailable and counters
+restart from the active backend when the store changes. The local key cap is
+`RATE_LIMIT_MEMORY_MAX_KEYS` (default 10,000); expired entries are reclaimed,
+active entries are never evicted. If this cap is full, fail-closed classes
+return a sanitized 503 with `Retry-After`; the low-risk general IP backstop
+continues to fail open. A coalesced warning reports the limiter, failure reason
+and active fallback mode without request identity data. Production without a
+configured Redis URL also warns that counters are process-local; use one API
+instance or configure Redis for shared limits. See `backend/.env.example` for
+the 50x shared-IP defaults and breaker settings. These request limits do not
+provide global LLM spend, queue-depth, storage-quota or stream-duration budgets.
 
 By default, workers run in a worker thread inside the backend process, so no
 extra process management is needed. To run them on separate hardware, start

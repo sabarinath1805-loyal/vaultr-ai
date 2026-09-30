@@ -9,7 +9,7 @@ import type {
 } from "express-rate-limit";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { envInt, uploadSessionRateLimitConfiguration } from "./runtimeConfig";
-import { getRedisProducerConnection } from "./queue/connection";
+import { getRedisRateLimitConnection } from "./queue/connection";
 
 export type RateLimitClass =
   | "general"
@@ -248,7 +248,7 @@ export class RedisRateLimitStore implements Store {
     try {
       await this.client.eval(REDIS_DECREMENT_SCRIPT, 1, this.key(key));
     } catch {
-      logStoreDegraded(this.namespace, "counter cleanup failed");
+      throw new RateLimitStoreUnavailableError(this.namespace);
     }
   }
 
@@ -265,12 +265,143 @@ export class RedisRateLimitStore implements Store {
   }
 }
 
+export type RateLimitStoreMode = "redis" | "memory";
+
+/**
+ * Process-wide breaker shared by every limiter store. A single in-flight probe
+ * tests Redis after the cooldown; other concurrent requests stay on their
+ * bounded local counters until that probe succeeds or fails.
+ */
+export class RedisRateLimitCircuitBreaker {
+  private failures = 0;
+  private openedUntil = 0;
+  private probeInFlight = false;
+
+  constructor(
+    private readonly options: {
+      failureThreshold: number;
+      cooldownMs: number;
+      now?: () => number;
+    },
+  ) {}
+
+  get mode(): RateLimitStoreMode {
+    return this.now() < this.openedUntil ? "memory" : "redis";
+  }
+
+  async run<T>(
+    redisOperation: () => Promise<T>,
+    memoryOperation: () => T | Promise<T>,
+    onFailure: () => void,
+  ): Promise<T> {
+    const now = this.now();
+    if (now < this.openedUntil || this.probeInFlight) {
+      return memoryOperation();
+    }
+
+    const probe = this.openedUntil > 0;
+    if (probe) this.probeInFlight = true;
+    try {
+      const result = await redisOperation();
+      this.failures = 0;
+      this.openedUntil = 0;
+      return result;
+    } catch {
+      this.failures += 1;
+      if (probe || this.failures >= Math.max(1, this.options.failureThreshold)) {
+        this.openedUntil = this.now() + Math.max(1, this.options.cooldownMs);
+      }
+      onFailure();
+      return memoryOperation();
+    } finally {
+      if (probe) this.probeInFlight = false;
+    }
+  }
+
+  private now(): number {
+    return (this.options.now ?? Date.now)();
+  }
+}
+
+type ResilientRateLimitStoreOptions = {
+  redis: Store;
+  memory: Store;
+  breaker: RedisRateLimitCircuitBreaker;
+  limiterName: string;
+  onDegraded: (event: { limiter: string; reason: string; mode: RateLimitStoreMode }) => void;
+};
+
+/** Redis-first store that continues with bounded per-process counters on error. */
+export class ResilientRateLimitStore implements Store {
+  // The primary store is shared when healthy; `localKeys` remains false so
+  // express-rate-limit does not mistake temporary fallback for a pure local
+  // configuration and reject construction under a distributed-store setup.
+  localKeys = false;
+
+  constructor(private readonly options: ResilientRateLimitStoreOptions) {}
+
+  init(options: Options): void {
+    this.options.redis.init?.(options);
+    this.options.memory.init?.(options);
+  }
+
+  get(key: string): Promise<ClientRateLimitInfo | undefined> {
+    return this.run(
+      () => Promise.resolve(this.options.redis.get?.(key)),
+      () => this.options.memory.get?.(key),
+    );
+  }
+
+  increment(key: string): Promise<IncrementResponse> {
+    return this.run(
+      () => Promise.resolve(this.options.redis.increment(key)),
+      () => this.options.memory.increment(key),
+    );
+  }
+
+  async decrement(key: string): Promise<void> {
+    await this.run(
+      async () => {
+        await this.options.redis.decrement?.(key);
+      },
+      async () => {
+        await this.options.memory.decrement?.(key);
+      },
+    );
+  }
+
+  async resetKey(key: string): Promise<void> {
+    await this.run(
+      async () => {
+        await this.options.redis.resetKey(key);
+      },
+      async () => {
+        await this.options.memory.resetKey(key);
+      },
+    );
+  }
+
+  private run<T>(redisOperation: () => Promise<T>, memoryOperation: () => T | Promise<T>): Promise<T> {
+    return this.options.breaker.run(redisOperation, memoryOperation, () => {
+      this.options.onDegraded({
+        limiter: this.options.limiterName,
+        reason: "Redis rate-limit operation failed",
+        mode: "memory",
+      });
+    });
+  }
+}
+
 let lastStoreWarningAt = 0;
-function logStoreDegraded(limiterName: string, reason: string): void {
+function logStoreDegraded(limiterName: string, reason: string, mode: RateLimitStoreMode = "memory"): void {
   const now = Date.now();
   if (now - lastStoreWarningAt < 60_000) return;
   lastStoreWarningAt = now;
-  console.warn("[rate-limit] store degraded", { limiter: limiterName, reason });
+  console.warn("[rate-limit] store degraded", {
+    limiter: limiterName,
+    reason,
+    mode,
+  });
 }
 
 export function usesSharedRateLimitStore(
@@ -328,7 +459,7 @@ function perUserMax(name: RateLimitClass): number {
     case "authLoginIp":
     case "authLoginIdentifierIp":
       return name === "authLoginIp"
-        ? envInt("RATE_LIMIT_AUTH_LOGIN_MAX", 30)
+        ? envInt("RATE_LIMIT_AUTH_LOGIN_MAX", 100)
         : envInt("RATE_LIMIT_AUTH_ACCOUNT_MAX", 10);
     case "authEmailIp":
     case "authSignupIdentifierIp":
@@ -388,35 +519,35 @@ function ipMax(name: RateLimitClass): number {
   if (name === "general") {
     return envInt(
       "RATE_LIMIT_GENERAL_IP_MAX",
-      perUserMax("general") * 10,
+      perUserMax("general") * 50,
     );
   }
-  // Login is unauthenticated. Preserve its existing coarse failed-attempt
-  // ceiling; the 10x shared-office rule applies to authenticated budgets.
+  // Login is unauthenticated. Its coarse failed-attempt ceiling is separate
+  // from the identifier+IP cap and does not count successful login responses.
   if (name === "authLoginIp") return perUserMax(name);
   if (name === "authEmailIp") return envInt("RATE_LIMIT_AUTH_EMAIL_IP_MAX", 100);
-  if (name === "authFlow") return envInt("RATE_LIMIT_AUTH_FLOW_IP_MAX", perUserMax(name) * 10);
-  if (name === "authMfa") return envInt("RATE_LIMIT_AUTH_MFA_IP_MAX", perUserMax(name) * 10);
+  if (name === "authFlow") return envInt("RATE_LIMIT_AUTH_FLOW_IP_MAX", perUserMax(name) * 50);
+  if (name === "authMfa") return envInt("RATE_LIMIT_AUTH_MFA_IP_MAX", perUserMax(name) * 50);
   if (name === "uploadCreate") {
     return envInt(
       "RATE_LIMIT_UPLOAD_SESSION_CREATE_IP_MAX",
-      perUserMax(name) * 10,
+      perUserMax(name) * 50,
     );
   }
   if (name === "uploadMutation") {
     return envInt(
       "RATE_LIMIT_UPLOAD_SESSION_MUTATION_IP_MAX",
-      perUserMax(name) * 10,
+      perUserMax(name) * 50,
     );
   }
   if (name === "uploadPolling") {
     return envInt(
       "RATE_LIMIT_UPLOAD_SESSION_POLL_IP_MAX",
-      perUserMax(name) * 10,
+      perUserMax(name) * 50,
     );
   }
   const explicit = `RATE_LIMIT_${name.replace(/[A-Z]/g, (letter) => `_${letter}`).toUpperCase()}_IP_MAX`;
-  return envInt(explicit, perUserMax(name) * 10);
+  return envInt(explicit, perUserMax(name) * 50);
 }
 
 function definition(name: RateLimitClass, scope: RateLimitScope): CounterConfig {
@@ -486,11 +617,23 @@ function keyFor(config: CounterConfig, req: Request, res: Response): string {
 function storeFor(name: RateLimitClass, scope: RateLimitScope): Store {
   const namespace = `${name}:${scope}`;
   if (usesSharedRateLimitStore()) {
-    const client = getRedisProducerConnection() as unknown as RedisRateLimitClient;
-    return new RedisRateLimitStore(client, namespace);
+    const client = getRedisRateLimitConnection() as unknown as RedisRateLimitClient;
+    const limiterName = namespace;
+    return new ResilientRateLimitStore({
+      redis: new RedisRateLimitStore(client, namespace),
+      memory: new BoundedMemoryRateLimitStore({ namespace }),
+      breaker: sharedRedisRateLimitCircuitBreaker,
+      limiterName,
+      onDegraded: ({ limiter, reason, mode }) => logStoreDegraded(limiter, reason, mode),
+    });
   }
   return new BoundedMemoryRateLimitStore({ namespace });
 }
+
+const sharedRedisRateLimitCircuitBreaker = new RedisRateLimitCircuitBreaker({
+  failureThreshold: envInt("RATE_LIMIT_REDIS_FAILURE_THRESHOLD", 3),
+  cooldownMs: envInt("RATE_LIMIT_REDIS_COOLDOWN_MS", 30_000),
+});
 
 const limiterCache = new Map<string, RateLimitRequestHandler>();
 
@@ -520,7 +663,7 @@ function limiterFor(name: RateLimitClass, scope: RateLimitScope): RateLimitReque
     passOnStoreError: config.errorPolicy === "open",
     store: storeFor(name, scope),
     logger: {
-      error: () => logStoreDegraded(config.name, "open limiter allowed a request"),
+      error: () => logStoreDegraded(config.name, "open limiter allowed a request", "memory"),
       warn: (_error, message) => {
         if (message) console.warn("[rate-limit] configuration warning", message);
       },
@@ -686,7 +829,7 @@ export function sendRateLimitStoreUnavailable(
   res: Response,
 ): boolean {
   if (!(error instanceof RateLimitStoreUnavailableError)) return false;
-  logStoreDegraded(error.limiterName, "fail-closed limiter rejected a request");
+  logStoreDegraded(error.limiterName, "bounded memory key capacity exhausted", "memory");
   res.setHeader("Retry-After", "30");
   const requestId = typeof res.locals.requestId === "string" ? res.locals.requestId : undefined;
   res.status(503).json({

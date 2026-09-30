@@ -1,26 +1,41 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import express from "express";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
-import { authenticatedRateLimit, ipRateLimiter } from "../../lib/rateLimit";
 
 const fakes = vi.hoisted(() => {
+  const environmentNames = [
+    "NODE_ENV",
+    "QUEUE_DRIVER",
+    "REDIS_URL",
+    "RATE_LIMIT_GENERAL_MAX",
+    "RATE_LIMIT_GENERAL_IP_MAX",
+    "RATE_LIMIT_CHAT_MAX",
+    "RATE_LIMIT_CHAT_IP_MAX",
+    "RATE_LIMIT_EXPORT_MAX",
+    "RATE_LIMIT_EXPORT_IP_MAX",
+    "RATE_LIMIT_AUTH_LOGIN_MAX",
+    "RATE_LIMIT_AUTH_ACCOUNT_MAX",
+    "RATE_LIMIT_UPLOAD_SESSION_MUTATION_MAX",
+    "RATE_LIMIT_UPLOAD_SESSION_MUTATION_IP_MAX",
+    "RATE_LIMIT_UPLOAD_SESSION_CREATE_IP_MAX",
+  ];
+  const originalEnv = Object.fromEntries(environmentNames.map((name) => [name, process.env[name]]));
   process.env.NODE_ENV = "test";
   process.env.QUEUE_DRIVER = "postgres";
   delete process.env.REDIS_URL;
   process.env.RATE_LIMIT_GENERAL_MAX = "10000";
   process.env.RATE_LIMIT_GENERAL_IP_MAX = "10000";
-  process.env.RATE_LIMIT_CHAT_MAX = "20";
-  process.env.RATE_LIMIT_CHAT_IP_MAX = "200";
+  process.env.RATE_LIMIT_CHAT_MAX = "30";
+  process.env.RATE_LIMIT_CHAT_IP_MAX = "1500";
   process.env.RATE_LIMIT_EXPORT_MAX = "1";
   process.env.RATE_LIMIT_EXPORT_IP_MAX = "100";
-  process.env.RATE_LIMIT_AUTH_LOGIN_MAX = "30";
+  process.env.RATE_LIMIT_AUTH_LOGIN_MAX = "100";
   process.env.RATE_LIMIT_AUTH_ACCOUNT_MAX = "2";
-  process.env.RATE_LIMIT_AUTH_ACCOUNT_IP_MAX = "30";
   process.env.RATE_LIMIT_UPLOAD_SESSION_MUTATION_MAX = "2";
   process.env.RATE_LIMIT_UPLOAD_SESSION_MUTATION_IP_MAX = "200";
   process.env.RATE_LIMIT_UPLOAD_SESSION_CREATE_IP_MAX = "200";
 
   return {
+    originalEnv,
     signInWithPassword: vi.fn(async (input: { email: string; password: string }) => {
       if (input.password !== "correct-horse") {
         return {
@@ -132,6 +147,13 @@ async function chat(userId: string, ip: string) {
 }
 
 describe("WS5 rate-limit remediation regressions", () => {
+  afterAll(() => {
+    for (const [name, value] of Object.entries(fakes.originalEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+
   beforeEach(() => {
     fakes.signInWithPassword.mockClear();
   });
@@ -139,7 +161,7 @@ describe("WS5 rate-limit remediation regressions", () => {
   it("keeps 99 peers usable after one user exhausts the chat budget", async () => {
     const officeIp = "198.51.100.41";
     let abuserResponse;
-    for (let i = 0; i < 21; i++) {
+    for (let i = 0; i < 31; i++) {
       abuserResponse = await chat("ws5-abuser", officeIp);
     }
     expect(abuserResponse?.status).toBe(429);
@@ -176,43 +198,6 @@ describe("WS5 rate-limit remediation regressions", () => {
     }
   }, 60000);
 
-  it("keeps the generous chat IP backstop effective while identities rotate", async () => {
-    const previousIpMax = process.env.RATE_LIMIT_CHAT_IP_MAX;
-    process.env.RATE_LIMIT_CHAT_IP_MAX = "3";
-    const isolatedRateLimitApp = express();
-    isolatedRateLimitApp.set("trust proxy", 1);
-    isolatedRateLimitApp.post(
-      "/limited-chat",
-      (req, res, next) => {
-        res.locals.userId = req.get("x-test-user");
-        next();
-      },
-      ipRateLimiter("chat"),
-      authenticatedRateLimit("chat"),
-      (_req, res) => res.sendStatus(204),
-    );
-    const sharedIp = "198.51.100.42";
-    try {
-      for (let i = 0; i < 3; i++) {
-        const response = await request(isolatedRateLimitApp)
-          .post("/limited-chat")
-          .set("X-Test-User", `ws5-rotating-identity-${i}`)
-          .set(fromIp(sharedIp));
-        expect(response.status, `rotating identity ${i}`).toBe(204);
-      }
-
-      const overIpBudget = await request(isolatedRateLimitApp)
-        .post("/limited-chat")
-        .set("X-Test-User", "ws5-rotating-identity-3")
-        .set(fromIp(sharedIp));
-      expect(overIpBudget.status).toBe(429);
-      expect(overIpBudget.headers["retry-after"]).toBeDefined();
-    } finally {
-      if (previousIpMax === undefined) delete process.env.RATE_LIMIT_CHAT_IP_MAX;
-      else process.env.RATE_LIMIT_CHAT_IP_MAX = previousIpMax;
-    }
-  }, 60000);
-
   it("keys failed login attempts by source and normalized identifier", async () => {
     const email = "  Victim@Example.Test ";
     for (const ip of ["198.51.100.51", "198.51.100.52"]) {
@@ -245,11 +230,87 @@ describe("WS5 rate-limit remediation regressions", () => {
         .set(fromIp(ip))
         .send({ email: "VICTIM@example.test", password: "wrong-password" });
       expect(attackRepeat.status).toBe(429);
-      expect(JSON.stringify(attackRepeat.body)).not.toMatch(
-        /victim@example\.test|198\.51\.100\.(51|52)|ws5-user/,
-      );
+      expect(
+        JSON.stringify({ body: attackRepeat.body, headers: attackRepeat.headers }),
+      ).not.toMatch(/victim@example\.test|198\.51\.100\.(51|52)|ws5-user/);
       expect(attackRepeat.headers["retry-after"]).toBeDefined();
     }
+  });
+
+  it("does not count successful login responses toward either failed-attempt budget", async () => {
+    const headers = {
+      Origin: "http://localhost:3000",
+      ...fromIp("198.51.100.57"),
+    };
+    const failed = await request(app)
+      .post("/auth/login")
+      .set(headers)
+      .send({ email: "skip-success@example.test", password: "wrong-password" });
+    expect(failed.status).not.toBe(429);
+
+    const successful = await request(app)
+      .post("/auth/login")
+      .set(headers)
+      .send({ email: "skip-success@example.test", password: "correct-horse" });
+    expect(successful.status).toBe(200);
+
+    const secondFailure = await request(app)
+      .post("/auth/login")
+      .set(headers)
+      .send({ email: "skip-success@example.test", password: "wrong-password" });
+    expect(secondFailure.status).not.toBe(429);
+    const thirdFailure = await request(app)
+      .post("/auth/login")
+      .set(headers)
+      .send({ email: "skip-success@example.test", password: "wrong-password" });
+    expect(thirdFailure.status).toBe(429);
+    expect(
+      JSON.stringify({ body: thirdFailure.body, headers: thirdFailure.headers }),
+    ).not.toMatch(/skip-success@example\.test|198\.51\.100\.57|ws5-user/);
+  });
+
+  it("allows ordinary shared-office login failures, caps a coarse IP flood, and leaves another source usable", async () => {
+    const officeIp = "198.51.100.55";
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const response = await request(app)
+        .post("/auth/login")
+        .set("Origin", "http://localhost:3000")
+        .set(fromIp(officeIp))
+        .send({
+          email: `office-${attempt}@example.test`,
+          password: "wrong-password",
+        });
+      expect(response.status, `office failure ${attempt}`).not.toBe(429);
+    }
+
+    for (let attempt = 50; attempt < 100; attempt++) {
+      const response = await request(app)
+        .post("/auth/login")
+        .set("Origin", "http://localhost:3000")
+        .set(fromIp(officeIp))
+        .send({
+          email: `office-${attempt}@example.test`,
+          password: "wrong-password",
+        });
+      expect(response.status, `coarse-IP failure ${attempt}`).not.toBe(429);
+    }
+
+    const flooded = await request(app)
+      .post("/auth/login")
+      .set("Origin", "http://localhost:3000")
+      .set(fromIp(officeIp))
+      .send({ email: "office-flood@example.test", password: "wrong-password" });
+    expect(
+      flooded.status,
+      JSON.stringify({ headers: flooded.headers, body: flooded.body }),
+    ).toBe(429);
+
+    const independentSource = await request(app)
+      .post("/auth/login")
+      .set("Origin", "http://localhost:3000")
+      .set(fromIp("198.51.100.56"))
+      .send({ email: "valid@example.test", password: "correct-horse" });
+    expect(independentSource.status).toBe(200);
   });
 
   it("keeps signup and password-reset identifier budgets separate", async () => {

@@ -6,6 +6,8 @@ import {
   BoundedMemoryRateLimitStore,
   RateLimitStoreUnavailableError,
   RedisRateLimitStore,
+  RedisRateLimitCircuitBreaker,
+  ResilientRateLimitStore,
   rateLimitStoreErrorHandler,
   rateLimitStoreErrorPolicy,
   ipRateLimiter,
@@ -88,6 +90,89 @@ describe("shared Redis counter store", () => {
 
     now += 1_000;
     expect((await secondProcessStore.increment("hashed-user-key")).totalHits).toBe(1);
+  });
+});
+
+describe("Redis rate-limit outage fallback", () => {
+  it("serves bounded local counters through an outage, then probes and returns to shared Redis", async () => {
+    let now = 10_000;
+    let available = false;
+    const redisData = new Map<string, number>();
+    const client = {
+      eval: vi.fn(async (_script: string, _keyCount: number, ...args: Array<string | number>) => {
+        if (!available) throw new Error("synthetic redis outage");
+        const key = String(args[0]);
+        const next = (redisData.get(key) ?? 0) + 1;
+        redisData.set(key, next);
+        return [next, 60_000];
+      }),
+    };
+    const breaker = new RedisRateLimitCircuitBreaker({
+      failureThreshold: 2,
+      cooldownMs: 500,
+      now: () => now,
+    });
+    const redis = new RedisRateLimitStore(client, "resilient-test", () => now);
+    const memory = new BoundedMemoryRateLimitStore({
+      namespace: "resilient-test",
+      maxKeys: 3,
+      now: () => now,
+      state: new Map(),
+    });
+    const degraded = vi.fn();
+    const store = new ResilientRateLimitStore({
+      redis,
+      memory,
+      breaker,
+      limiterName: "chat:user",
+      onDegraded: degraded,
+    });
+    store.init({ windowMs: 60_000 } as Options);
+
+    expect((await store.increment("hashed-user-a")).totalHits).toBe(1);
+    expect((await store.increment("hashed-user-a")).totalHits).toBe(2);
+    expect(breaker.mode).toBe("memory");
+    expect(degraded).toHaveBeenCalledWith({
+      limiter: "chat:user",
+      reason: "Redis rate-limit operation failed",
+      mode: "memory",
+    });
+
+    now += 499;
+    expect((await store.increment("hashed-user-a")).totalHits).toBe(3);
+    expect(client.eval).toHaveBeenCalledTimes(2);
+
+    now += 1;
+    available = true;
+    expect((await store.increment("hashed-user-a")).totalHits).toBe(1);
+    expect(breaker.mode).toBe("redis");
+    expect((await store.increment("hashed-user-a")).totalHits).toBe(2);
+  });
+
+  it("keeps the fallback bounded and preserves the fail-closed store error", async () => {
+    const client = {
+      eval: vi.fn(async () => {
+        throw new Error("synthetic redis outage");
+      }),
+    };
+    const store = new ResilientRateLimitStore({
+      redis: new RedisRateLimitStore(client, "capped-test"),
+      memory: new BoundedMemoryRateLimitStore({
+        namespace: "capped-test",
+        maxKeys: 1,
+        state: new Map(),
+      }),
+      breaker: new RedisRateLimitCircuitBreaker({
+        failureThreshold: 1,
+        cooldownMs: 1_000,
+      }),
+      limiterName: "export:user",
+      onDegraded: vi.fn(),
+    });
+    store.init({ windowMs: 60_000 } as Options);
+
+    expect((await store.increment("hashed-user-a")).totalHits).toBe(1);
+    await expect(store.increment("hashed-user-b")).rejects.toBeInstanceOf(RateLimitStoreUnavailableError);
   });
 });
 
@@ -218,5 +303,55 @@ describe("rate-limit store error policy", () => {
     ] as const) {
       expect(rateLimitStoreErrorPolicy(name, scope)).toBe("closed");
     }
+  });
+
+  it("returns 503 only for fail-closed classes when the Redis fallback key cap is full", async () => {
+    const cappedApp = (name: string, passOnStoreError: boolean) => {
+      const app = express();
+      const store = new ResilientRateLimitStore({
+        redis: new RedisRateLimitStore(
+          {
+            eval: async () => {
+              throw new Error("synthetic redis outage");
+            },
+          },
+          `cap-${name}`,
+        ),
+        memory: new BoundedMemoryRateLimitStore({
+          namespace: `cap-${name}`,
+          maxKeys: 1,
+          state: new Map(),
+        }),
+        breaker: new RedisRateLimitCircuitBreaker({
+          failureThreshold: 1,
+          cooldownMs: 60_000,
+        }),
+        limiterName: name,
+        onDegraded: vi.fn(),
+      });
+      const limiter = rateLimit({
+        windowMs: 60_000,
+        limit: 10,
+        keyGenerator: (req) => req.get("x-synthetic-key") ?? "missing",
+        store,
+        passOnStoreError,
+        logger: { error: vi.fn(), warn: vi.fn() },
+      });
+      app.get("/limited", limiter, (_req, res) => res.sendStatus(204));
+      app.use(rateLimitStoreErrorHandler);
+      return app;
+    };
+
+    const general = cappedApp("general:ip", true);
+    expect((await request(general).get("/limited").set("X-Synthetic-Key", "first-ip")).status).toBe(204);
+    expect((await request(general).get("/limited").set("X-Synthetic-Key", "second-ip")).status).toBe(204);
+
+    const exportApp = cappedApp("export:user", false);
+    expect((await request(exportApp).get("/limited").set("X-Synthetic-Key", "first-user")).status).toBe(204);
+    const capped = await request(exportApp).get("/limited").set("X-Synthetic-Key", "second-user");
+    expect(capped.status).toBe(503);
+    expect(capped.headers["retry-after"]).toBe("30");
+    expect(capped.body.code).toBe("rate_limit_unavailable");
+    expect(JSON.stringify(capped.body)).not.toMatch(/first-user|second-user/);
   });
 });

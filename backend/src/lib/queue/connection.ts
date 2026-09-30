@@ -26,6 +26,13 @@ export const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
  */
 let connection: IORedis | null = null;
 let producerConnection: IORedis | null = null;
+let rateLimitConnection: IORedis | null = null;
+
+/** Rate-limit commands are tiny local-network operations with a hard budget. */
+export function redisRateLimitTimeoutMs(): number {
+    const raw = Number(process.env.RATE_LIMIT_REDIS_TIMEOUT_MS);
+    return Number.isFinite(raw) && raw >= 50 ? Math.min(raw, 5_000) : 250;
+}
 
 /** Producer command budget. Small: this is a local network hop. */
 export function redisProducerTimeoutMs(): number {
@@ -124,6 +131,26 @@ export function getRedisProducerConnection(): IORedis {
 }
 
 /**
+ * Dedicated connection for admission counters. Its short deadline and
+ * disabled offline queue ensure a Redis outage reaches the limiter's bounded
+ * in-process fallback promptly without changing BullMQ producer behavior.
+ */
+export function getRedisRateLimitConnection(): IORedis {
+    if (!rateLimitConnection) {
+        rateLimitConnection = new IORedis(REDIS_URL, {
+            maxRetriesPerRequest: 1,
+            enableReadyCheck: false,
+            enableOfflineQueue: false,
+            commandTimeout: redisRateLimitTimeoutMs(),
+        });
+        // ioredis emits 'error' for refused connections and failed retries.
+        // The limiter owns the coalesced warning and safe degradation policy.
+        rateLimitConnection.on("error", () => {});
+    }
+    return rateLimitConnection;
+}
+
+/**
  * Hard deadline around one producer-side Redis interaction.
  *
  * The connection options above are necessary but NOT sufficient: BullMQ's
@@ -174,6 +201,11 @@ export async function closeRedisConnection(): Promise<void> {
         const p = producerConnection;
         closing.push(p.quit().catch(() => p.disconnect()));
         producerConnection = null;
+    }
+    if (rateLimitConnection) {
+        const r = rateLimitConnection;
+        closing.push(r.quit().catch(() => r.disconnect()));
+        rateLimitConnection = null;
     }
     await Promise.all(closing);
 }
