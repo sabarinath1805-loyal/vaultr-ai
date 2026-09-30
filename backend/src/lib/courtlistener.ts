@@ -1,8 +1,11 @@
 import { downloadFile, listFiles } from "./storage";
 import { devLog } from "./log";
+import { guardedFetch } from "./mcp/client";
 import type { Db } from "./supabase";
 
 const COURTLISTENER_BASE = "https://www.courtlistener.com/api/rest/v4";
+const COURTLISTENER_ORIGIN = "https://www.courtlistener.com";
+const COURTLISTENER_OPINIONS_PATH = "/api/rest/v4/opinions/";
 const COURTLISTENER_WEB_BASE = "https://www.courtlistener.com";
 const COURTLISTENER_STORAGE_BASE = "https://storage.courtlistener.com";
 const COURTLISTENER_R2_OPINIONS_PREFIX = "courtlistener/opinions/by-cluster";
@@ -56,20 +59,77 @@ function parseCourtlistenerError(status: number, detail: string): string {
     return `CourtListener error (${status}): ${message}`;
 }
 
+function trustedCourtlistenerApiUrl(pathOrUrl: string): URL {
+    let url: URL;
+    try {
+        url = /^[a-z][a-z\d+.-]*:/i.test(pathOrUrl)
+            ? new URL(pathOrUrl)
+            : new URL(`${COURTLISTENER_BASE}${pathOrUrl}`);
+    } catch {
+        throw new Error("CourtListener API URL is invalid.");
+    }
+    if (
+        url.protocol !== "https:" ||
+        url.origin !== COURTLISTENER_ORIGIN ||
+        url.username ||
+        url.password ||
+        url.port ||
+        url.hash ||
+        !url.pathname.startsWith("/api/rest/v4/")
+    ) {
+        throw new Error("CourtListener API URL is not allowed.");
+    }
+    return url;
+}
+
+/** Normalize an untrusted pagination link into a path on the one opinions endpoint. */
+function validatedOpinionNextPath(
+    value: unknown,
+    clusterId: number,
+): string | null {
+    const next = asString(value);
+    if (!next) return null;
+    if (next.length > 4096) {
+        throw new Error("CourtListener pagination URL is not allowed.");
+    }
+
+    let url: URL;
+    try {
+        url = new URL(next, `${COURTLISTENER_BASE}/opinions/`);
+    } catch {
+        throw new Error("CourtListener pagination URL is not allowed.");
+    }
+    const clusters = url.searchParams.getAll("cluster");
+    if (
+        url.protocol !== "https:" ||
+        url.origin !== COURTLISTENER_ORIGIN ||
+        url.username ||
+        url.password ||
+        url.port ||
+        url.hash ||
+        url.pathname !== COURTLISTENER_OPINIONS_PATH ||
+        clusters.length !== 1 ||
+        clusters[0] !== String(clusterId)
+    ) {
+        throw new Error("CourtListener pagination URL is not allowed.");
+    }
+
+    // Pass only the validated relative path to the fetch layer. A later code
+    // change cannot accidentally re-introduce the remote absolute URL.
+    return `${url.pathname.slice("/api/rest/v4".length)}${url.search}`;
+}
+
 async function courtlistenerFetch<T>(
     pathOrUrl: string,
     init?: RequestInit,
     apiToken?: string | null,
 ): Promise<T> {
-    const url = pathOrUrl.startsWith("http")
-        ? pathOrUrl
-        : `${COURTLISTENER_BASE}${pathOrUrl}`;
+    const url = trustedCourtlistenerApiUrl(pathOrUrl);
     devLog("[courtlistener/api] request", {
         method: init?.method ?? "GET",
-        path: pathOrUrl,
-        url,
+        path: url.pathname,
     });
-    const response = await fetch(url, {
+    const response = await guardedFetch(url.toString(), {
         ...init,
         signal: init?.signal ?? AbortSignal.timeout(15_000),
         headers: {
@@ -79,7 +139,7 @@ async function courtlistenerFetch<T>(
     });
     devLog("[courtlistener/api] response", {
         method: init?.method ?? "GET",
-        path: pathOrUrl,
+        path: url.pathname,
         status: response.status,
     });
     if (!response.ok) {
@@ -231,7 +291,7 @@ async function fetchCaseOpinionsFromCourtlistenerOpinionsEndpoint(args: {
             remainingChars -=
                 (compacted.text?.length ?? 0) + (compacted.html?.length ?? 0);
         }
-        nextUrl = asString(data.next);
+        nextUrl = validatedOpinionNextPath(data.next, args.clusterId);
     }
 
     return {
