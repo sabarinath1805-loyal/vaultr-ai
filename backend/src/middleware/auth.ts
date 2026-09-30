@@ -1,4 +1,9 @@
-import { Request, Response, NextFunction } from "express";
+import express, {
+  Request,
+  Response,
+  NextFunction,
+  type RequestHandler,
+} from "express";
 import type { ParamsFlatDictionary } from "express-serve-static-core";
 import { createServerSupabase, type Db } from "../lib/supabase";
 import { syncProfileEmail } from "../lib/userLookup";
@@ -7,6 +12,7 @@ import { createRequestSupabase } from "../lib/authSession";
 import { requestOriginIsTrusted } from "../lib/origins";
 import { devLog, isDev } from "../lib/log";
 import { setCurrentUser } from "../lib/observability/sentry";
+import { authenticatedRateLimit } from "../lib/rateLimit";
 
 function summarizeMfaFactors(
   factors: Array<{
@@ -107,14 +113,13 @@ function getAdminClient(res: Response) {
   }
 }
 
-export async function requireAuth(
+async function authenticateRequest(
   req: Request<ParamsFlatDictionary>,
   res: Response,
-  next: NextFunction,
-): Promise<void> {
+): Promise<boolean> {
   const auth = req.headers.authorization ?? "";
   const admin = getAdminClient(res);
-  if (!admin) return;
+  if (!admin) return false;
 
   let token = "";
   let user: Awaited<ReturnType<typeof admin.auth.getUser>>["data"]["user"] =
@@ -135,7 +140,7 @@ export async function requireAuth(
         code: "untrusted_origin",
         detail: "The request origin is not allowed.",
       });
-      return;
+      return false;
     }
 
     try {
@@ -151,13 +156,13 @@ export async function requireAuth(
     } catch (error) {
       console.error("[auth] cookie session initialization failed", error);
       res.status(500).json({ detail: "Server auth is not configured" });
-      return;
+      return false;
     }
   }
 
   if (!user || !token) {
     res.status(401).json({ detail: "Invalid or expired session" });
-    return;
+    return false;
   }
 
   res.locals.userId = user.id;
@@ -179,9 +184,53 @@ export async function requireAuth(
     });
   }
   if (!(await enforceLoginMfaIfEnabled(req, res, admin, token))) {
-    return;
+    return false;
   }
-  next();
+  return true;
+}
+
+const genericAuthenticatedRateLimit = authenticatedRateLimit("general");
+
+/** Authenticate and then apply the default per-user request budget. */
+export const requireAuth: RequestHandler = (req, res, next) => {
+  void authenticateRequest(req as Request<ParamsFlatDictionary>, res)
+    .then((authenticated) => {
+      if (!authenticated) return;
+      genericAuthenticatedRateLimit(req, res, next);
+    })
+    .catch(next);
+};
+
+/**
+ * For body-heavy protected routes: authenticate before parsing, apply the
+ * route-sized JSON cap, then use the same general per-user request budget.
+ * The route attaches its narrower business-class limiter immediately after
+ * this middleware when one applies.
+ */
+export function requireAuthWithBody(
+  limit: "256kb" | "2mb",
+): RequestHandler {
+  const parser = express.json({ limit });
+  return function requireAuthWithBody(req, res, next) {
+    void authenticateRequest(req as Request<ParamsFlatDictionary>, res)
+      .then((authenticated) => {
+        if (!authenticated) {
+          // The auth response is decided before body parsing. Drain the
+          // unread request stream so an early 401/403 does not reset a client
+          // connection that already sent a bounded body.
+          if (!req.complete) req.resume();
+          return;
+        }
+        parser(req, res, (parseError) => {
+          if (parseError) {
+            next(parseError);
+            return;
+          }
+          genericAuthenticatedRateLimit(req, res, next);
+        });
+      })
+      .catch(next);
+  };
 }
 
 export async function requireMfaIfEnrolled(

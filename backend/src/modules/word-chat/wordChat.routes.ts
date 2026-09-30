@@ -12,6 +12,8 @@ import { openAssistantSse } from "../../lib/assistantSse";
 import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { requireAuth } from "../../middleware/auth";
+import { requireAuthenticatedBody } from "../../middleware/authBody";
+import { authenticatedRateLimit } from "../../lib/rateLimit";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import {
@@ -472,7 +474,7 @@ wordChatRouter.patch(
 // client-executed tool call. The SSE stream carries a `client_tool_call`
 // frame down to the pane; the pane executes it with Office.js and posts the
 // outcome here, which resolves the tool loop awaiting inside POST /word-chat.
-wordChatRouter.post("/tool-result", requireAuth, (req, res) => {
+wordChatRouter.post("/tool-result", requireAuthenticatedBody("2mb"), authenticatedRateLimit("toolResult"), (req, res) => {
   const userId = res.locals.userId as string;
   const body =
     req.body && typeof req.body === "object" && !Array.isArray(req.body)
@@ -498,7 +500,7 @@ wordChatRouter.post("/tool-result", requireAuth, (req, res) => {
 });
 
 // POST /word-chat — Word-specific streaming endpoint.
-wordChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
+wordChatRouter.post("/", requireAuthenticatedBody("2mb"), authenticatedRateLimit("chat"), asyncRoute(async (req, res) => {
   const userId = res.locals.userId as string;
   const userEmail = res.locals.userEmail as string | undefined;
   const body =

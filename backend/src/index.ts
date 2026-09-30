@@ -6,6 +6,8 @@ import path from "node:path";
 import { app } from "./app";
 import { enforceDocumentLifecycleMigration } from "./lib/dbq/lifecycleGuard";
 import { manifestPublicKey } from "./lib/manifestSigning";
+import { closeRedisConnection } from "./lib/queue/connection";
+import { warnForProcessLocalProductionRateLimits } from "./lib/rateLimit";
 import { validateRuntimeConfiguration } from "./lib/runtimeConfig";
 import { startAllWorkers, stopAllWorkers } from "./workerRuntime";
 import { reportError } from "./lib/observability/sentry";
@@ -31,6 +33,7 @@ async function validateBootConfiguration(): Promise<void> {
   let stage = "runtime-config";
   try {
     validateRuntimeConfiguration();
+    warnForProcessLocalProductionRateLimits();
     stage = "manifest-key";
     const signingKey = manifestPublicKey();
     if (signingKey) {
@@ -141,19 +144,21 @@ void main();
 async function stopBackgroundWork(): Promise<void> {
   if (WORKERS_MODE === "inline") {
     await stopAllWorkers();
-    return;
-  }
-  const thread = workerThread;
-  if (!thread) return;
-  await new Promise<void>((resolve) => {
-    const timeout = setTimeout(() => resolve(), 10_000);
-    timeout.unref();
-    thread.once("exit", () => {
-      clearTimeout(timeout);
-      resolve();
+  } else if (workerThread) {
+    const thread = workerThread;
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => resolve(), 10_000);
+      timeout.unref();
+      thread.once("exit", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      thread.postMessage("shutdown");
     });
-    thread.postMessage("shutdown");
-  });
+  }
+  // The API process owns its own Redis client for the shared limiter store,
+  // even when queue workers run in another thread/process.
+  await closeRedisConnection();
 }
 
 const shutdown = createShutdown({

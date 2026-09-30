@@ -17,6 +17,7 @@ import { ssoConfiguration, ssoDomainSchema } from "../../lib/ssoConfig";
 import { sendInternalError } from "../../lib/httpError";
 import { requestOriginIsWordAddin } from "../../lib/origins";
 import { requireAuth } from "../../middleware/auth";
+import { authenticatedRateLimit } from "../../lib/rateLimit";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { requireTrustedOrigin } from "../../middleware/trustedOrigin";
 import {
@@ -404,7 +405,7 @@ authRouter.get("/mfa/assurance", requireAuth, asyncRoute(async (req, res) => {
   res.json(data);
 }));
 
-authRouter.post("/mfa/enroll", requireAuth, asyncRoute(async (req, res) => {
+authRouter.post("/mfa/enroll", requireAuth, authenticatedRateLimit("authMfa"), asyncRoute(async (req, res) => {
   const friendlyName = friendlyNameSchema.safeParse(req.body?.friendlyName);
   if (!friendlyName.success) return invalidBody(res);
   const client = cookieClient(req, res);
@@ -414,7 +415,7 @@ authRouter.post("/mfa/enroll", requireAuth, asyncRoute(async (req, res) => {
   res.status(201).json(data);
 }));
 
-authRouter.post("/mfa/challenge", requireAuth, asyncRoute(async (req, res) => {
+authRouter.post("/mfa/challenge", requireAuth, authenticatedRateLimit("authMfa"), asyncRoute(async (req, res) => {
   const parsed = factorSchema.safeParse(req.body);
   if (!parsed.success) return invalidBody(res);
   const client = cookieClient(req, res);
@@ -424,7 +425,7 @@ authRouter.post("/mfa/challenge", requireAuth, asyncRoute(async (req, res) => {
   res.json(data);
 }));
 
-authRouter.post("/mfa/verify", requireAuth, asyncRoute(async (req, res) => {
+authRouter.post("/mfa/verify", requireAuth, authenticatedRateLimit("authMfa"), asyncRoute(async (req, res) => {
   const parsed = verificationSchema.safeParse(req.body);
   if (!parsed.success || !parsed.data.challengeId) return invalidBody(res);
   const client = cookieClient(req, res);
@@ -438,7 +439,7 @@ authRouter.post("/mfa/verify", requireAuth, asyncRoute(async (req, res) => {
   res.json({ user: publicAuthUser(data.user) });
 }));
 
-authRouter.post("/mfa/challenge-and-verify", requireAuth, asyncRoute(async (req, res) => {
+authRouter.post("/mfa/challenge-and-verify", requireAuth, authenticatedRateLimit("authMfa"), asyncRoute(async (req, res) => {
   const parsed = verificationSchema.safeParse(req.body);
   if (!parsed.success) return invalidBody(res);
   const client = cookieClient(req, res);
@@ -451,7 +452,7 @@ authRouter.post("/mfa/challenge-and-verify", requireAuth, asyncRoute(async (req,
   res.json({ user: publicAuthUser(data.user) });
 }));
 
-authRouter.delete("/mfa/factors/:factorId", requireAuth, asyncRoute(async (req, res) => {
+authRouter.delete("/mfa/factors/:factorId", requireAuth, authenticatedRateLimit("authMfa"), asyncRoute(async (req, res) => {
   const parsed = factorSchema.safeParse({ factorId: req.params.factorId });
   if (!parsed.success) return invalidBody(res);
   const client = cookieClient(req, res);

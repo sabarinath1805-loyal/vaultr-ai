@@ -9,6 +9,8 @@ import { openAssistantSse } from "../../lib/assistantSse";
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { requireAuth } from "../../middleware/auth";
+import { requireAuthenticatedBody } from "../../middleware/authBody";
+import { authenticatedRateLimit } from "../../lib/rateLimit";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { enqueueChatTurnAudit } from "../../lib/audit";
@@ -52,7 +54,7 @@ import {
 export const projectChatRouter = Router({ mergeParams: true });
 
 // POST /projects/:projectId/chat — streaming
-projectChatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
+projectChatRouter.post("/", requireAuthenticatedBody("2mb"), authenticatedRateLimit("chat"), asyncRoute(async (req, res) => {
     const userId = res.locals.userId as string;
     const userEmail = res.locals.userEmail as string | undefined;
     const { projectId } = req.params;

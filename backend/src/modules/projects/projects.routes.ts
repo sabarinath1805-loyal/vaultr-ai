@@ -8,6 +8,7 @@ import { Router, type Response } from "express";
 import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
+import { authenticatedRateLimit } from "../../lib/rateLimit";
 import { sendInternalError } from "../../lib/httpError";
 import { parsePaginationQuery } from "../../lib/pagination";
 import { normalizeSearchTerm } from "../../lib/search";
@@ -407,6 +408,7 @@ projectsRouter.get("/:projectId/documents", requireAuth, asyncRoute(async (req, 
 projectsRouter.get(
   "/:projectId/export",
   requireAuth,
+  authenticatedRateLimit("export"),
   requireMfaIfEnrolled,
   asyncRoute(async (req, res) => {
     const userId = res.locals.userId as string;

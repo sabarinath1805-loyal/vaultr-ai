@@ -13,6 +13,7 @@ import {
   reportMessage,
   requestRoutePattern,
 } from "../lib/observability/sentry";
+import { sendRateLimitStoreUnavailable } from "../lib/rateLimit";
 
 type ErrorBody = {
   code?: unknown;
@@ -46,6 +47,19 @@ export function protectInternalErrorResponses(
       Object.keys(errorBody).some(
         (key) => !["code", "detail", "request_id"].includes(key),
       );
+    const rateLimitUnavailable =
+      errorBody?.code === "rate_limit_unavailable" &&
+      errorBody.detail ===
+        "Request admission is temporarily unavailable. Please retry shortly." &&
+      !hasUnexpectedFields;
+    if (rateLimitUnavailable) {
+      return originalJson({
+        code: "rate_limit_unavailable",
+        detail:
+          "Request admission is temporarily unavailable. Please retry shortly.",
+        ...(requestId ? { request_id: requestId } : {}),
+      });
+    }
     if (
       errorBody?.code === INTERNAL_ERROR_CODE &&
       errorBody.detail === INTERNAL_ERROR_MESSAGE &&
@@ -105,6 +119,7 @@ export const handleUnhandledError: ErrorRequestHandler = (
     next(error);
     return;
   }
+  if (sendRateLimitStoreUnavailable(error, res)) return;
 
   const bodyParserError = error as { status?: unknown; type?: unknown };
   const requestId =

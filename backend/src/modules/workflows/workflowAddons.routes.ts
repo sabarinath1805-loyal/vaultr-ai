@@ -5,7 +5,9 @@
 
 import { Router, type Response } from "express";
 import { requireAuth } from "../../middleware/auth";
+import { requireAuthenticatedBody } from "../../middleware/authBody";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
+import { authenticatedRateLimit } from "../../lib/rateLimit";
 import { createServerSupabase } from "../../lib/supabase";
 import { sendDocumentDisplay } from "../../lib/documentDisplay";
 import { sendInternalError } from "../../lib/httpError";
@@ -93,7 +95,8 @@ workflowAddonsRouter.get(
 // POST /workflow-addons/:addonId/import
 workflowAddonsRouter.post(
   "/:addonId/import",
-  requireAuth,
+  requireAuthenticatedBody("256kb"),
+  authenticatedRateLimit("workflowImport"),
   asyncRoute(async (req, res) => {
     const userId = res.locals.userId as string;
     const db = createServerSupabase();

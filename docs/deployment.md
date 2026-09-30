@@ -516,6 +516,21 @@ of two interchangeable transports:
 The transport is selected automatically; `QUEUE_DRIVER=postgres` forces the
 database queue even when `REDIS_URL` is set.
 
+### API rate-limit counters
+
+Authenticated request budgets are keyed by user identity, with generous
+source-IP backstops for shared offices. When `REDIS_URL` is configured, the API
+uses the existing Redis connection for atomic, expiring rate-limit counters
+across API instances; this remains true when `QUEUE_DRIVER=postgres` is set.
+Without Redis, counters use a bounded in-process store and reset when the API
+restarts. Production boot logs a warning in that mode: run one API process or
+configure `REDIS_URL` before serving multiple API instances. Authentication,
+chat, upload, export, and other cost-sensitive limits return a sanitized 503
+with `Retry-After` if their counter store is unavailable. The coarse general
+IP backstop may allow a request through on store failure; protected routes
+still apply their fail-closed user budget. Per-user and IP caps are separately
+configurable with the `RATE_LIMIT_*` variables in `backend/.env.example`.
+
 By default, workers run in a worker thread inside the backend process, so no
 extra process management is needed. To run them on separate hardware, start
 `node dist/worker.js` (any number of instances — work is partitioned safely)

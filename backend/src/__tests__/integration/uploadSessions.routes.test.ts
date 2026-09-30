@@ -125,7 +125,7 @@ describe("upload session routes", () => {
       .post("/upload-sessions")
       .send(manifest(51));
 
-    expect(response.status).toBe(400);
+    expect(response.status, JSON.stringify(response.body)).toBe(400);
     expect(mocks.rpc).not.toHaveBeenCalled();
     expect(mocks.getSignedUploadUrl).not.toHaveBeenCalled();
   });

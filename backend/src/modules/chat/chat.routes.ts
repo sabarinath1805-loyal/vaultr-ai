@@ -10,7 +10,9 @@ import { openAssistantSse } from "../../lib/assistantSse";
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { requireAuth } from "../../middleware/auth";
+import { requireAuthenticatedBody } from "../../middleware/authBody";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
+import { authenticatedRateLimit } from "../../lib/rateLimit";
 import { createServerSupabase } from "../../lib/supabase";
 import { enqueueChatTurnAudit } from "../../lib/audit";
 import {
@@ -115,7 +117,7 @@ chatRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
 }));
 
 // POST /chat/create
-chatRouter.post("/create", requireAuth, asyncRoute(async (req, res) => {
+chatRouter.post("/create", requireAuthenticatedBody("256kb"), authenticatedRateLimit("chatCreate"), asyncRoute(async (req, res) => {
     const userId = res.locals.userId as string;
     const userEmail = res.locals.userEmail as string | undefined;
     const parsedProjectId = parseOptionalProjectId(req.body?.project_id);
@@ -395,7 +397,7 @@ chatRouter.delete("/:chatId", requireAuth, asyncRoute(async (req, res) => {
 }));
 
 // POST /chat/:chatId/generate-title
-chatRouter.post("/:chatId/generate-title", requireAuth, asyncRoute(async (req, res) => {
+chatRouter.post("/:chatId/generate-title", requireAuthenticatedBody("2mb"), authenticatedRateLimit("chatCreate"), asyncRoute(async (req, res) => {
     const userId = res.locals.userId as string;
     const userEmail = res.locals.userEmail as string | undefined;
     const { chatId } = req.params;
@@ -439,7 +441,7 @@ chatRouter.post("/:chatId/generate-title", requireAuth, asyncRoute(async (req, r
 }));
 
 // POST /chat — streaming
-chatRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
+chatRouter.post("/", requireAuthenticatedBody("2mb"), authenticatedRateLimit("chat"), asyncRoute(async (req, res) => {
     const userId = res.locals.userId as string;
     const body =
         req.body && typeof req.body === "object" && !Array.isArray(req.body)

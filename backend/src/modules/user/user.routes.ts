@@ -20,6 +20,7 @@ import crypto from "crypto";
 import { Router } from "express";
 import { requireAuth, requireMfaIfEnrolled } from "../../middleware/auth";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
+import { authenticatedRateLimit } from "../../lib/rateLimit";
 import { createServerSupabase } from "../../lib/supabase";
 import { recordAudit } from "../../lib/audit";
 import { sendInternalError } from "../../lib/httpError";
@@ -1060,6 +1061,7 @@ userRouter.patch(
 userRouter.delete(
     "/account",
     requireAuth,
+    authenticatedRateLimit("dataDelete"),
     requireMfaIfEnrolled,
     asyncRoute(async (_req, res) => {
         const userId = res.locals.userId as string;
@@ -1084,6 +1086,7 @@ userRouter.delete(
 userRouter.delete(
     "/chats",
     requireAuth,
+    authenticatedRateLimit("dataDelete"),
     requireMfaIfEnrolled,
     asyncRoute(async (_req, res) => {
         const userId = res.locals.userId as string;
@@ -1098,6 +1101,7 @@ userRouter.delete(
 userRouter.delete(
     "/projects",
     requireAuth,
+    authenticatedRateLimit("dataDelete"),
     requireMfaIfEnrolled,
     asyncRoute(async (_req, res) => {
         const userId = res.locals.userId as string;
@@ -1112,6 +1116,7 @@ userRouter.delete(
 userRouter.delete(
     "/tabular-reviews",
     requireAuth,
+    authenticatedRateLimit("dataDelete"),
     requireMfaIfEnrolled,
     asyncRoute(async (_req, res) => {
         const userId = res.locals.userId as string;
@@ -1129,6 +1134,7 @@ userRouter.delete(
 userRouter.delete(
     "/memories",
     requireAuth,
+    authenticatedRateLimit("dataDelete"),
     requireMfaIfEnrolled,
     asyncRoute(async (_req, res) => {
         const userId = res.locals.userId as string;
@@ -1142,6 +1148,7 @@ userRouter.delete(
 userRouter.get(
     "/export",
     requireAuth,
+    authenticatedRateLimit("export"),
     requireMfaIfEnrolled,
     asyncRoute(async (_req, res) => {
         const userId = res.locals.userId as string;
@@ -1168,6 +1175,7 @@ userRouter.get(
 userRouter.get(
     "/chats/export",
     requireAuth,
+    authenticatedRateLimit("export"),
     requireMfaIfEnrolled,
     asyncRoute(async (_req, res) => {
         const userId = res.locals.userId as string;
@@ -1194,6 +1202,7 @@ userRouter.get(
 userRouter.get(
     "/tabular-reviews/export",
     requireAuth,
+    authenticatedRateLimit("export"),
     requireMfaIfEnrolled,
     asyncRoute(async (_req, res) => {
         const userId = res.locals.userId as string;
@@ -1229,6 +1238,7 @@ userRouter.get(
 userRouter.post(
     "/exports",
     requireAuth,
+    authenticatedRateLimit("export"),
     requireMfaIfEnrolled,
     asyncRoute(async (req, res) => {
         const userId = res.locals.userId as string;

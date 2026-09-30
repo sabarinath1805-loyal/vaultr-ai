@@ -10,7 +10,6 @@
 // limit in app.ts stays small no matter how large the upload is.
 
 import { randomUUID } from "node:crypto";
-import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { Router, type Response } from "express";
 
@@ -19,7 +18,9 @@ import { uploadSessionRateLimitConfiguration } from "../../lib/runtimeConfig";
 import { storageEnabled } from "../../lib/storage";
 import { createServerSupabase } from "../../lib/supabase";
 import { requireAuth } from "../../middleware/auth";
+import { requireAuthenticatedBody } from "../../middleware/authBody";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
+import { authenticatedRateLimit } from "../../lib/rateLimit";
 // Sibling topic files are imported directly, as in every module; outside the
 // module, uploads.service.ts is the only door.
 import { validateDestinationAccess } from "./uploads.access";
@@ -40,33 +41,6 @@ import type { UploadFailure } from "./uploads.shared";
 export const uploadSessionsRouter = Router();
 
 const uploadRateLimits = uploadSessionRateLimitConfiguration();
-
-const uploadSessionMutationLimiter = rateLimit({
-  windowMs: uploadRateLimits.mutationWindowMinutes * 60 * 1000,
-  max: uploadRateLimits.mutationMax,
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (_req, res) => String(res.locals.userId),
-  message: {
-    code: "upload_session_control_rate_limit",
-    detail: "Too many upload requests. Please try again later.",
-  },
-});
-
-// Key by the authenticated user, not the caller-supplied session id, so random
-// path segments cannot create unlimited limiter buckets. The client backs off
-// status polling, while this independent ceiling protects the API from abuse.
-const uploadSessionPollingLimiter = rateLimit({
-  windowMs: uploadRateLimits.pollingWindowMinutes * 60 * 1000,
-  max: uploadRateLimits.pollingMax,
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (_req, res) => String(res.locals.userId),
-  message: {
-    code: "upload_session_poll_rate_limit",
-    detail: "Upload status was checked too often. Please try again shortly.",
-  },
-});
 
 const sessionIdSchema = z.string().uuid();
 const fileCompletionRequestSchema = z
@@ -100,8 +74,8 @@ function sendUploadFailure(res: Response, failure: UploadFailure): void {
 // POST /upload-sessions
 uploadSessionsRouter.post(
   "/",
-  requireAuth,
-  uploadSessionMutationLimiter,
+  requireAuthenticatedBody("256kb"),
+  authenticatedRateLimit("uploadMutation"),
   asyncRoute(async (req, res) => {
     if (!storageEnabled) {
       return void res.status(503).json({ detail: "Storage is not configured" });
@@ -146,7 +120,7 @@ uploadSessionsRouter.post(
 uploadSessionsRouter.get(
   "/:sessionId",
   requireAuth,
-  uploadSessionPollingLimiter,
+  authenticatedRateLimit("uploadPolling"),
   asyncRoute(async (req, res) => {
     const userId = res.locals.userId as string;
     const db = createServerSupabase();
@@ -159,8 +133,8 @@ uploadSessionsRouter.get(
 // POST /upload-sessions/:sessionId/urls
 uploadSessionsRouter.post(
   "/:sessionId/urls",
-  requireAuth,
-  uploadSessionMutationLimiter,
+  requireAuthenticatedBody("256kb"),
+  authenticatedRateLimit("uploadMutation"),
   asyncRoute(async (req, res) => {
     if (!storageEnabled) {
       return void res.status(503).json({ detail: "Storage is not configured" });
@@ -182,8 +156,8 @@ uploadSessionsRouter.post(
 // POST /upload-sessions/:sessionId/files/:fileId/complete
 uploadSessionsRouter.post(
   "/:sessionId/files/:fileId/complete",
-  requireAuth,
-  uploadSessionMutationLimiter,
+  requireAuthenticatedBody("256kb"),
+  authenticatedRateLimit("uploadMutation"),
   asyncRoute(async (req, res) => {
     if (!storageEnabled) {
       return void res.status(503).json({ detail: "Storage is not configured" });
@@ -213,7 +187,7 @@ uploadSessionsRouter.post(
 uploadSessionsRouter.delete(
   "/:sessionId",
   requireAuth,
-  uploadSessionMutationLimiter,
+  authenticatedRateLimit("uploadMutation"),
   asyncRoute(async (req, res) => {
     const userId = res.locals.userId as string;
     const db = createServerSupabase();

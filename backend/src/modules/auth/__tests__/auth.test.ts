@@ -58,6 +58,7 @@ vi.mock("../../../middleware/auth", () => ({
     res: { locals: Record<string, unknown> },
     next: () => void,
   ) => {
+    res.locals.userId = "user-1";
     res.locals.authClient = authClient;
     res.locals.authSource = "cookie";
     next();

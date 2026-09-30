@@ -13,7 +13,9 @@
 import { Router, type Response } from "express";
 import { randomUUID } from "node:crypto";
 import { requireAuth } from "../../middleware/auth";
+import { requireAuthenticatedBody } from "../../middleware/authBody";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
+import { authenticatedRateLimit } from "../../lib/rateLimit";
 import { createServerSupabase } from "../../lib/supabase";
 import { recordAudit } from "../../lib/audit";
 import { sendInternalError } from "../../lib/httpError";
@@ -194,7 +196,7 @@ tabularRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
 }));
 
 // POST /tabular-review/prompt (must come before /:reviewId routes)
-tabularRouter.post("/prompt", requireAuth, asyncRoute(async (req, res) => {
+tabularRouter.post("/prompt", requireAuth, authenticatedRateLimit("chat"), asyncRoute(async (req, res) => {
     const result = await draftColumnPrompt(createServerSupabase(), {
         userId: res.locals.userId as string,
         title: typeof req.body.title === "string" ? req.body.title.trim() : "",
@@ -322,6 +324,7 @@ tabularRouter.post("/:reviewId/clear-cells", requireAuth, asyncRoute(async (req,
 tabularRouter.post(
     "/:reviewId/regenerate-cell",
     requireAuth,
+    authenticatedRateLimit("chat"),
     asyncRoute(async (req, res) => {
         const { row_id, column_index } = req.body as {
             row_id?: string;
@@ -346,7 +349,7 @@ tabularRouter.post(
 );
 
 // POST /tabular-review/:reviewId/generate
-tabularRouter.post("/:reviewId/generate", requireAuth, asyncRoute(async (req, res) => {
+tabularRouter.post("/:reviewId/generate", requireAuthenticatedBody("2mb"), authenticatedRateLimit("chat"), asyncRoute(async (req, res) => {
     const userId = res.locals.userId as string;
     const userEmail = res.locals.userEmail as string | undefined;
     const { reviewId } = req.params;
@@ -676,7 +679,7 @@ tabularRouter.get(
 // ---------------------------------------------------------------------------
 
 // POST /tabular-review/:reviewId/chat
-tabularRouter.post("/:reviewId/chat", requireAuth, asyncRoute(async (req, res) => {
+tabularRouter.post("/:reviewId/chat", requireAuthenticatedBody("2mb"), authenticatedRateLimit("chat"), asyncRoute(async (req, res) => {
     const userId = res.locals.userId as string;
     const userEmail = res.locals.userEmail as string | undefined;
     const { reviewId } = req.params;
