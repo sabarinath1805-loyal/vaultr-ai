@@ -1,6 +1,5 @@
 import express from "express";
-import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   rpc: vi.fn(),
@@ -65,6 +64,11 @@ import { uploadSessionsRouter } from "../../modules/uploads/uploads.routes";
 const app = express();
 app.use(express.json());
 app.use("/upload-sessions", uploadSessionsRouter);
+import { createSupertestClient } from "../helpers/supertestClient";
+
+const client = createSupertestClient(app);
+beforeAll(client.start);
+afterAll(client.close);
 
 function manifest(fileCount = 1) {
   return {
@@ -86,7 +90,7 @@ describe("upload session routes", () => {
   });
 
   it("creates one atomic session reservation and returns direct PUT URLs", async () => {
-    const response = await request(app)
+    const response = await client.request()
       .post("/upload-sessions")
       .send(manifest(2));
 
@@ -121,7 +125,7 @@ describe("upload session routes", () => {
   });
 
   it("rejects more than 50 files without touching the database or storage", async () => {
-    const response = await request(app)
+    const response = await client.request()
       .post("/upload-sessions")
       .send(manifest(51));
 
@@ -134,11 +138,14 @@ describe("upload session routes", () => {
     const requestBody = manifest();
     requestBody.files[0].filename = "notes.txt";
 
-    const response = await request(app)
+    const response = await client.request()
       .post("/upload-sessions")
       .send(requestBody);
 
-    expect(response.status).toBe(400);
+    expect(
+      response.status,
+      JSON.stringify({ headers: response.headers, body: response.body, text: response.text }),
+    ).toBe(400);
     expect(response.body).toMatchObject({
       code: "invalid_upload_session",
       detail: expect.stringContaining("Unsupported file type: txt"),
@@ -151,7 +158,7 @@ describe("upload session routes", () => {
     const requestBody = manifest();
     requestBody.files[0].size_bytes = 100 * 1024 * 1024 + 1;
 
-    const response = await request(app)
+    const response = await client.request()
       .post("/upload-sessions")
       .send(requestBody);
 
@@ -164,7 +171,7 @@ describe("upload session routes", () => {
   it("blocks a concurrent upload that targets the same mutable item", async () => {
     mocks.rpc.mockResolvedValue({ error: { message: "upload_target_busy" } });
 
-    const response = await request(app)
+    const response = await client.request()
       .post("/upload-sessions")
       .send(manifest());
 
@@ -178,7 +185,7 @@ describe("upload session routes", () => {
       error: { message: "upload_session_rate_limit_exceeded" },
     });
 
-    const response = await request(app)
+    const response = await client.request()
       .post("/upload-sessions")
       .send(manifest(50));
 
@@ -189,7 +196,7 @@ describe("upload session routes", () => {
   });
 
   it("returns 404 for an invalid session id before querying the database", async () => {
-    const response = await request(app).get("/upload-sessions/not-a-uuid");
+    const response = await client.request().get("/upload-sessions/not-a-uuid");
 
     expect(response.status).toBe(404);
     expect(mocks.rpc).not.toHaveBeenCalled();
@@ -254,7 +261,7 @@ describe("upload session destination access", () => {
       projectRole: "viewer",
     });
 
-    const response = await request(app)
+    const response = await client.request()
       .post("/upload-sessions")
       .send(versionManifest("document_version_create"));
 
@@ -272,7 +279,7 @@ describe("upload session destination access", () => {
     // missing one, so this half of the split stays a 404.
     mocks.ensureDocAccess.mockResolvedValue({ ok: false });
 
-    const response = await request(app)
+    const response = await client.request()
       .post("/upload-sessions")
       .send(versionManifest("document_version_create"));
 
@@ -291,7 +298,7 @@ describe("upload session destination access", () => {
       projectRole: "editor",
     });
 
-    const response = await request(app)
+    const response = await client.request()
       .post("/upload-sessions")
       .send(versionManifest("document_version_replace"));
 
@@ -310,7 +317,7 @@ describe("upload session destination access", () => {
       projectRole: "editor",
     });
 
-    const response = await request(app)
+    const response = await client.request()
       .post("/upload-sessions")
       .send(versionManifest("document_version_create"));
 
@@ -359,7 +366,7 @@ describe("upload session workflow destination", () => {
       projectRole: "viewer",
     });
 
-    const response = await request(app)
+    const response = await client.request()
       .post("/upload-sessions")
       .send(workflowManifest());
 
@@ -373,7 +380,7 @@ describe("upload session workflow destination", () => {
   it("keeps 404 for a caller with no verdict on the workflow", async () => {
     mocks.checkWorkflowAccess.mockResolvedValue({ ok: false });
 
-    const response = await request(app)
+    const response = await client.request()
       .post("/upload-sessions")
       .send(workflowManifest());
 
@@ -390,7 +397,7 @@ describe("upload session workflow destination", () => {
       projectRole: "editor",
     });
 
-    const response = await request(app)
+    const response = await client.request()
       .post("/upload-sessions")
       .send(workflowManifest());
 

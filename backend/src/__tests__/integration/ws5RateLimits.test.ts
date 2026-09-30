@@ -1,5 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import request from "supertest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fakes = vi.hoisted(() => {
   const environmentNames = [
@@ -129,6 +128,11 @@ vi.mock("../../lib/storage", async (importOriginal) => {
 });
 
 import { app } from "../../app";
+import { createSupertestClient } from "../helpers/supertestClient";
+
+const client = createSupertestClient(app);
+beforeAll(client.start);
+afterAll(client.close);
 
 function bearer(userId: string) {
   return `Bearer ws5-user-${userId}`;
@@ -139,7 +143,7 @@ function fromIp(ip: string) {
 }
 
 async function chat(userId: string, ip: string) {
-  return request(app)
+  return client.request()
     .post("/chat")
     .set("Authorization", bearer(userId))
     .set(fromIp(ip))
@@ -175,21 +179,21 @@ describe("WS5 rate-limit remediation regressions", () => {
     // Other expensive families also receive their own identity-keyed budget.
     for (let i = 0; i < 99; i++) {
       const userId = `ws5-upload-peer-${i}`;
-      const upload = await request(app)
+      const upload = await client.request()
         .post("/upload-sessions")
         .set("Authorization", bearer(userId))
         .set(fromIp(officeIp))
         .send({});
       expect(upload.status, `upload peer ${i}`).not.toBe(429);
 
-      const exported = await request(app)
+      const exported = await client.request()
         .post("/users/exports")
         .set("Authorization", bearer(`ws5-export-peer-${i}`))
         .set(fromIp(officeIp))
         .send({ type: "not-an-export" });
       expect(exported.status, `export peer ${i}`).not.toBe(429);
 
-      const tabular = await request(app)
+      const tabular = await client.request()
         .post("/tabular-review")
         .set("Authorization", bearer(`ws5-tabular-peer-${i}`))
         .set(fromIp(officeIp))
@@ -201,7 +205,7 @@ describe("WS5 rate-limit remediation regressions", () => {
   it("keys failed login attempts by source and normalized identifier", async () => {
     const email = "  Victim@Example.Test ";
     for (const ip of ["198.51.100.51", "198.51.100.52"]) {
-      const failed = await request(app)
+      const failed = await client.request()
         .post("/auth/login")
         .set("Origin", "http://localhost:3000")
         .set(fromIp(ip))
@@ -209,7 +213,7 @@ describe("WS5 rate-limit remediation regressions", () => {
       expect(failed.status).not.toBe(429);
     }
 
-    const cleanLogin = await request(app)
+    const cleanLogin = await client.request()
       .post("/auth/login")
       .set("Origin", "http://localhost:3000")
       .set(fromIp("198.51.100.53"))
@@ -217,14 +221,14 @@ describe("WS5 rate-limit remediation regressions", () => {
     expect(cleanLogin.status).toBe(200);
 
     for (const ip of ["198.51.100.51", "198.51.100.52"]) {
-      const secondFailure = await request(app)
+      const secondFailure = await client.request()
         .post("/auth/login")
         .set("Origin", "http://localhost:3000")
         .set(fromIp(ip))
         .send({ email: "VICTIM@example.test", password: "wrong-password" });
       expect(secondFailure.status).not.toBe(429);
 
-      const attackRepeat = await request(app)
+      const attackRepeat = await client.request()
         .post("/auth/login")
         .set("Origin", "http://localhost:3000")
         .set(fromIp(ip))
@@ -242,24 +246,24 @@ describe("WS5 rate-limit remediation regressions", () => {
       Origin: "http://localhost:3000",
       ...fromIp("198.51.100.57"),
     };
-    const failed = await request(app)
+    const failed = await client.request()
       .post("/auth/login")
       .set(headers)
       .send({ email: "skip-success@example.test", password: "wrong-password" });
     expect(failed.status).not.toBe(429);
 
-    const successful = await request(app)
+    const successful = await client.request()
       .post("/auth/login")
       .set(headers)
       .send({ email: "skip-success@example.test", password: "correct-horse" });
     expect(successful.status).toBe(200);
 
-    const secondFailure = await request(app)
+    const secondFailure = await client.request()
       .post("/auth/login")
       .set(headers)
       .send({ email: "skip-success@example.test", password: "wrong-password" });
     expect(secondFailure.status).not.toBe(429);
-    const thirdFailure = await request(app)
+    const thirdFailure = await client.request()
       .post("/auth/login")
       .set(headers)
       .send({ email: "skip-success@example.test", password: "wrong-password" });
@@ -272,7 +276,7 @@ describe("WS5 rate-limit remediation regressions", () => {
   it("allows ordinary shared-office login failures, caps a coarse IP flood, and leaves another source usable", async () => {
     const officeIp = "198.51.100.55";
     for (let attempt = 0; attempt < 50; attempt++) {
-      const response = await request(app)
+      const response = await client.request()
         .post("/auth/login")
         .set("Origin", "http://localhost:3000")
         .set(fromIp(officeIp))
@@ -284,7 +288,7 @@ describe("WS5 rate-limit remediation regressions", () => {
     }
 
     for (let attempt = 50; attempt < 100; attempt++) {
-      const response = await request(app)
+      const response = await client.request()
         .post("/auth/login")
         .set("Origin", "http://localhost:3000")
         .set(fromIp(officeIp))
@@ -295,7 +299,7 @@ describe("WS5 rate-limit remediation regressions", () => {
       expect(response.status, `coarse-IP failure ${attempt}`).not.toBe(429);
     }
 
-    const flooded = await request(app)
+    const flooded = await client.request()
       .post("/auth/login")
       .set("Origin", "http://localhost:3000")
       .set(fromIp(officeIp))
@@ -305,7 +309,7 @@ describe("WS5 rate-limit remediation regressions", () => {
       JSON.stringify({ headers: flooded.headers, body: flooded.body }),
     ).toBe(429);
 
-    const independentSource = await request(app)
+    const independentSource = await client.request()
       .post("/auth/login")
       .set("Origin", "http://localhost:3000")
       .set(fromIp("198.51.100.56"))
@@ -320,20 +324,20 @@ describe("WS5 rate-limit remediation regressions", () => {
       ...fromIp("198.51.100.54"),
     };
     for (let attempt = 0; attempt < 10; attempt++) {
-      const signup = await request(app)
+      const signup = await client.request()
         .post("/auth/signup")
         .set(headers)
         .send(identity);
       expect(signup.status, `signup ${attempt}`).toBe(201);
     }
 
-    const blockedSignup = await request(app)
+    const blockedSignup = await client.request()
       .post("/auth/signup")
       .set(headers)
       .send(identity);
     expect(blockedSignup.status).toBe(429);
 
-    const reset = await request(app)
+    const reset = await client.request()
       .post("/auth/password-reset")
       .set(headers)
       .send({ email: "person@example.test" });
@@ -342,7 +346,7 @@ describe("WS5 rate-limit remediation regressions", () => {
   });
 
   it("rejects an unauthenticated malformed upload body before JSON parsing", async () => {
-    const first = await request(app)
+    const first = await client.request()
       .post("/upload-sessions")
       .set("Content-Type", "application/json")
       .set(fromIp("198.51.100.61"))
@@ -357,13 +361,13 @@ describe("WS5 rate-limit remediation regressions", () => {
       Authorization: bearer("ws5-export-alias-user"),
       ...fromIp("198.51.100.71"),
     };
-    const first = await request(app)
+    const first = await client.request()
       .post("/user/exports")
       .set(headers)
       .send({ type: "account" });
     expect(first.status).toBe(503); // local runner is intentionally disabled
 
-    const second = await request(app)
+    const second = await client.request()
       .post("/users/exports")
       .set(headers)
       .send({ type: "account" });

@@ -1,5 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import request from "supertest";
+import { afterAll, beforeAll, describe, it, expect, vi, beforeEach } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Hoisted mock fns reconfigured per-test. Access helpers + model settings are
@@ -207,6 +206,11 @@ vi.mock("../../lib/documentVersions", () => ({
 
 import { app } from "../../app";
 import { REVIEW_EDIT_FORBIDDEN } from "../../modules/tabular/tabular.service";
+import { createSupertestClient } from "../helpers/supertestClient";
+
+const client = createSupertestClient(app);
+beforeAll(client.start);
+afterAll(client.close);
 
 const AUTH = ["Authorization", "Bearer test"] as const;
 
@@ -257,7 +261,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
 
-      const res = await request(app)
+      const res = await client.request()
         .get("/tabular-review")
         .set(...AUTH);
 
@@ -268,7 +272,7 @@ describe("tabular.routes", () => {
         it("returns 500 with detail when the RPC errors", async () => {
             supabaseState.rpc = { data: null, error: { message: "boom" } };
 
-      const res = await request(app)
+      const res = await client.request()
         .get("/tabular-review")
         .set(...AUTH);
 
@@ -280,7 +284,7 @@ describe("tabular.routes", () => {
     // ── POST /tabular-review (create) ─────────────────────────────────────
     describe("POST /tabular-review", () => {
         it("rejects creation without an explicit model", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review")
                 .set(...AUTH)
                 .send({ document_ids: [], columns_config: [] });
@@ -295,7 +299,7 @@ describe("tabular.routes", () => {
         });
 
         it("rejects standalone organization scope", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review")
                 .set(...AUTH)
                 .send({
@@ -350,7 +354,7 @@ describe("tabular.routes", () => {
             // d2 is not accessible — it must be filtered out of the insert.
             filterAccessibleDocumentIds.mockResolvedValue(["d1"]);
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review")
                 .set(...AUTH)
                 .send({
@@ -446,7 +450,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review")
                 .set(...AUTH)
                 .send({
@@ -567,7 +571,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review")
                 .set(...AUTH)
                 .send({
@@ -615,7 +619,7 @@ describe("tabular.routes", () => {
         it("returns 404 when project access is denied", async () => {
             checkProjectAccess.mockResolvedValue({ ok: false });
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review")
                 .set(...AUTH)
                 .send({
@@ -635,7 +639,7 @@ describe("tabular.routes", () => {
                 error: { message: "insert failed" },
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review")
                 .set(...AUTH)
                 .send({
@@ -654,7 +658,7 @@ describe("tabular.routes", () => {
         it("returns 404 when the review does not exist", async () => {
             supabaseState.tables.tabular_reviews = { data: null, error: null };
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/tabular-review/r1")
                 .set(...AUTH);
 
@@ -669,7 +673,7 @@ describe("tabular.routes", () => {
             };
             ensureReviewAccess.mockResolvedValue({ ok: false });
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/tabular-review/r1")
                 .set(...AUTH);
 
@@ -707,7 +711,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/tabular-review/r1")
                 .set(...AUTH);
 
@@ -747,7 +751,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/tabular-review/r1/access")
                 .set(...AUTH);
 
@@ -771,7 +775,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/access")
                 .set(...AUTH)
                 .send({ email: " U1@Test.Local ", role: "editor" });
@@ -786,7 +790,7 @@ describe("tabular.routes", () => {
     // ── PATCH /tabular-review/:reviewId ───────────────────────────────────
     describe("PATCH /tabular-review/:reviewId", () => {
         it("returns 400 when project_id is an invalid type", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/tabular-review/r1")
                 .set(...AUTH)
                 .send({ project_id: 123 });
@@ -798,7 +802,7 @@ describe("tabular.routes", () => {
         });
 
         it("rejects the retired shared_with input", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/tabular-review/r1")
                 .set(...AUTH)
                 .send({ shared_with: ["U1@Test.Local"] });
@@ -812,7 +816,7 @@ describe("tabular.routes", () => {
         it("returns 404 when the review does not exist", async () => {
             supabaseState.tables.tabular_reviews = { data: null, error: null };
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/tabular-review/r1")
                 .set(...AUTH)
                 .send({ title: "Renamed" });
@@ -836,7 +840,7 @@ describe("tabular.routes", () => {
                 projectRole: "viewer",
             });
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/tabular-review/r1")
                 .set(...AUTH)
                 .send({ columns_config: [{ index: 0, name: "X", prompt: "p" }] });
@@ -889,7 +893,7 @@ describe("tabular.routes", () => {
             seedMove("org-1");
             resolveContentOrgId.mockResolvedValue({ ok: true, orgId: null });
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/tabular-review/r1")
                 .set(...AUTH)
                 .send({ project_id: "p-to" });
@@ -912,7 +916,7 @@ describe("tabular.routes", () => {
                 detail: "connection reset",
             });
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/tabular-review/r1")
                 .set(...AUTH)
                 .send({ project_id: "p-to" });
@@ -926,7 +930,7 @@ describe("tabular.routes", () => {
             seedMove(null);
             resolveContentOrgId.mockResolvedValue({ ok: true, orgId: "org-2" });
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/tabular-review/r1")
                 .set(...AUTH)
                 .send({ project_id: "p-to" });
@@ -947,7 +951,7 @@ describe("tabular.routes", () => {
             // tenant, or an unrelated PATCH becomes a permission change.
             seedMove("org-1");
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/tabular-review/r1")
                 .set(...AUTH)
                 .send({ title: "Renamed" });
@@ -979,7 +983,7 @@ describe("tabular.routes", () => {
                 projectRole: "owner",
             });
 
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/tabular-review/r1")
                 .set(...AUTH);
 
@@ -1005,7 +1009,7 @@ describe("tabular.routes", () => {
                 projectRole: "owner",
             });
 
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/tabular-review/r1")
                 .set(...AUTH);
 
@@ -1029,7 +1033,7 @@ describe("tabular.routes", () => {
                     projectRole,
                 });
 
-                const res = await request(app)
+                const res = await client.request()
                     .delete("/tabular-review/r1")
                     .set(...AUTH);
 
@@ -1045,7 +1049,7 @@ describe("tabular.routes", () => {
         it("returns 404 when the review is missing", async () => {
             seedReview([{ data: null, error: null }]);
 
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/tabular-review/r1")
                 .set(...AUTH);
 
@@ -1057,7 +1061,7 @@ describe("tabular.routes", () => {
             seedReview([ownedRow, { data: null, error: null }]);
             ensureReviewAccess.mockResolvedValue({ ok: false });
 
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/tabular-review/r1")
                 .set(...AUTH);
 
@@ -1077,7 +1081,7 @@ describe("tabular.routes", () => {
                 projectRole: "owner",
             });
 
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/tabular-review/r1")
                 .set(...AUTH);
 
@@ -1089,7 +1093,7 @@ describe("tabular.routes", () => {
     // ── POST /tabular-review/:reviewId/clear-cells ────────────────────────
     describe("POST /tabular-review/:reviewId/clear-cells", () => {
         it("returns 400 when row_ids is missing", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/clear-cells")
                 .set(...AUTH)
                 .send({});
@@ -1105,7 +1109,7 @@ describe("tabular.routes", () => {
             };
             ensureReviewAccess.mockResolvedValue({ ok: false });
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/clear-cells")
                 .set(...AUTH)
                 .send({ row_ids: ["row-1"] });
@@ -1126,7 +1130,7 @@ describe("tabular.routes", () => {
                 projectRole: "viewer",
             });
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/clear-cells")
                 .set(...AUTH)
                 .send({ row_ids: ["row-1"] });
@@ -1147,7 +1151,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/clear-cells")
                 .set(...AUTH)
                 .send({ row_ids: ["row-1"] });
@@ -1172,7 +1176,7 @@ describe("tabular.routes", () => {
             };
             supabaseState.rpc = { data: "running", error: null };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/clear-cells")
                 .set(...AUTH)
                 .send({ row_ids: ["row-1"] });
@@ -1197,7 +1201,7 @@ describe("tabular.routes", () => {
             };
             supabaseState.rpc = { data: "started", error: null };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/clear-cells")
                 .set(...AUTH)
                 .send({ row_ids: ["row-1"] });
@@ -1213,7 +1217,7 @@ describe("tabular.routes", () => {
     // ── POST /tabular-review/:reviewId/regenerate-cell ────────────────────
     describe("POST /tabular-review/:reviewId/regenerate-cell", () => {
         it("returns 400 when row_id / column_index are missing", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/regenerate-cell")
                 .set(...AUTH)
                 .send({});
@@ -1229,7 +1233,7 @@ describe("tabular.routes", () => {
             };
             ensureReviewAccess.mockResolvedValue({ ok: false });
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/regenerate-cell")
                 .set(...AUTH)
                 .send({ row_id: "row-1", column_index: 0 });
@@ -1251,7 +1255,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/regenerate-cell")
                 .set(...AUTH)
                 .send({ row_id: "row-1", column_index: 0 });
@@ -1296,7 +1300,7 @@ describe("tabular.routes", () => {
             };
             supabaseState.rpc = { data: "running", error: null };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/regenerate-cell")
                 .set(...AUTH)
                 .send({ row_id: "row-1", column_index: 0 });
@@ -1320,7 +1324,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/regenerate-cell")
                 .set(...AUTH)
                 .send({ row_id: "row-1", column_index: 0 });
@@ -1363,7 +1367,7 @@ describe("tabular.routes", () => {
             };
             filterAccessibleDocumentIds.mockResolvedValue([]);
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/regenerate-cell")
                 .set(...AUTH)
                 .send({ row_id: "row-forbidden", column_index: 0 });
@@ -1406,7 +1410,7 @@ describe("tabular.routes", () => {
                 api_keys: {},
             });
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/regenerate-cell")
                 .set(...AUTH)
                 .send({ row_id: "row-1", column_index: 0 });
@@ -1422,7 +1426,7 @@ describe("tabular.routes", () => {
         it("returns 404 when the review does not exist", async () => {
             supabaseState.tables.tabular_reviews = { data: null, error: null };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/generate")
                 .set(...AUTH);
 
@@ -1437,7 +1441,7 @@ describe("tabular.routes", () => {
             };
             ensureReviewAccess.mockResolvedValue({ ok: false });
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/generate")
                 .set(...AUTH);
 
@@ -1467,7 +1471,7 @@ describe("tabular.routes", () => {
                 projectRole: "viewer",
             });
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/generate")
                 .set(...AUTH)
                 .send({ expected_updated_at: new Date().toISOString() });
@@ -1502,7 +1506,7 @@ describe("tabular.routes", () => {
                 projectRole: "editor",
             });
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/generate")
                 .set(...AUTH);
 
@@ -1524,7 +1528,7 @@ describe("tabular.routes", () => {
             };
             ensureReviewAccess.mockResolvedValue({ ok: false });
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/generate")
                 .set(...AUTH);
 
@@ -1553,7 +1557,7 @@ describe("tabular.routes", () => {
                 projectRole: "viewer",
             });
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/tabular-review/r1/generate/stream")
                 .set(...AUTH);
 
@@ -1574,7 +1578,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/generate")
                 .set(...AUTH)
                 .send({ expected_updated_at: new Date().toISOString() });
@@ -1595,7 +1599,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/generate")
                 .set(...AUTH);
 
@@ -1621,7 +1625,7 @@ describe("tabular.routes", () => {
                 api_keys: {},
             });
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/generate")
                 .set(...AUTH);
 
@@ -1642,7 +1646,7 @@ describe("tabular.routes", () => {
             };
             supabaseState.tables.tabular_cells = { data: [], error: null };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/generate")
                 .set(...AUTH)
                 .send({});
@@ -1674,7 +1678,7 @@ describe("tabular.routes", () => {
             };
             supabaseState.rpc = { data: "started", error: null };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/generate")
                 .set(...AUTH)
                 .send({
@@ -1734,7 +1738,7 @@ describe("tabular.routes", () => {
                 };
                 supabaseState.rpc = { data: startResult, error: null };
 
-                const res = await request(app)
+                const res = await client.request()
                     .post("/tabular-review/r1/generate")
                     .set(...AUTH)
                     .send({
@@ -1757,7 +1761,7 @@ describe("tabular.routes", () => {
     // ── POST /tabular-review/:reviewId/chat (streaming GUARDS only) ───────
     describe("POST /tabular-review/:reviewId/chat", () => {
         it("returns 400 when no user message is present", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/chat")
                 .set(...AUTH)
                 .send({ messages: [{ role: "assistant", content: "hi" }] });
@@ -1773,7 +1777,7 @@ describe("tabular.routes", () => {
             };
             ensureReviewAccess.mockResolvedValue({ ok: false });
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/chat")
                 .set(...AUTH)
                 .send({ messages: [{ role: "user", content: "hello" }] });
@@ -1797,7 +1801,7 @@ describe("tabular.routes", () => {
                 projectRole: "viewer",
             });
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/chat")
                 .set(...AUTH)
                 .send({ messages: [{ role: "user", content: "hello" }] });
@@ -1825,7 +1829,7 @@ describe("tabular.routes", () => {
                 api_keys: {},
             });
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/chat")
                 .set(...AUTH)
                 .send({
@@ -1882,7 +1886,7 @@ describe("tabular.routes", () => {
                 project: { id: "p1", user_id: "other" },
             });
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/chat")
                 .set(...AUTH)
                 .send({
@@ -1984,7 +1988,7 @@ describe("tabular.routes", () => {
                 .spyOn(console, "error")
                 .mockImplementation(() => {});
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/tabular-review/r1/chat")
                 .set(...AUTH)
                 .send({
@@ -2036,7 +2040,7 @@ describe("tabular.routes", () => {
                 api_keys: { openai: "sk-test" },
             });
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/tabular-review/r1/chats/chat-1")
                 .set(...AUTH)
                 .send({ model: "gpt-5.6-sol", reasoningLevel: "low" });
@@ -2061,7 +2065,7 @@ describe("tabular.routes", () => {
             };
             ensureReviewAccess.mockResolvedValue({ ok: false });
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/tabular-review/r1/chats")
                 .set(...AUTH);
 
@@ -2079,7 +2083,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/tabular-review/r1/chats")
                 .set(...AUTH);
 
@@ -2104,13 +2108,13 @@ describe("tabular.routes", () => {
             supabaseState.tables.tabular_reviews = { data: null, error: null };
             supabaseState.tables.tabular_review_chats = CHAT_IN_R1;
 
-            const del = await request(app)
+            const del = await client.request()
                 .delete("/tabular-review/r-missing/chats/chat-1")
                 .set(...AUTH);
             expect(del.status).toBe(404);
             expect(del.body.detail).toBe("Review not found");
 
-            const rename = await request(app)
+            const rename = await client.request()
                 .patch("/tabular-review/r-missing/chats/chat-1")
                 .set(...AUTH)
                 .send({ title: "Renamed" });
@@ -2126,13 +2130,13 @@ describe("tabular.routes", () => {
             supabaseState.tables.tabular_review_chats = CHAT_IN_R1;
             ensureReviewAccess.mockResolvedValue({ ok: false });
 
-            const del = await request(app)
+            const del = await client.request()
                 .delete("/tabular-review/r1/chats/chat-1")
                 .set(...AUTH);
             expect(del.status).toBe(404);
             expect(del.body.detail).toBe("Review not found");
 
-            const rename = await request(app)
+            const rename = await client.request()
                 .patch("/tabular-review/r1/chats/chat-1")
                 .set(...AUTH)
                 .send({ title: "Renamed" });
@@ -2150,13 +2154,13 @@ describe("tabular.routes", () => {
                 error: null,
             };
 
-            const del = await request(app)
+            const del = await client.request()
                 .delete("/tabular-review/r1/chats/chat-1")
                 .set(...AUTH);
             expect(del.status).toBe(404);
             expect(del.body.detail).toBe("Chat not found");
 
-            const rename = await request(app)
+            const rename = await client.request()
                 .patch("/tabular-review/r1/chats/chat-1")
                 .set(...AUTH)
                 .send({ title: "Renamed" });
@@ -2174,7 +2178,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/tabular-review/r1/chats/chat-missing")
                 .set(...AUTH);
 
@@ -2196,7 +2200,7 @@ describe("tabular.routes", () => {
                 error: null,
             };
 
-            const rename = await request(app)
+            const rename = await client.request()
                 .patch("/tabular-review/r1/chats/chat-1")
                 .set(...AUTH)
                 .send({ title: "Renamed" });
@@ -2205,7 +2209,7 @@ describe("tabular.routes", () => {
                 "Only the chat's creator can modify it",
             );
 
-            const del = await request(app)
+            const del = await client.request()
                 .delete("/tabular-review/r1/chats/chat-1")
                 .set(...AUTH);
             expect(del.status).toBe(403);
@@ -2239,13 +2243,13 @@ describe("tabular.routes", () => {
                 projectRole: "owner",
             });
 
-            const rename = await request(app)
+            const rename = await client.request()
                 .patch("/tabular-review/r1/chats/chat-1")
                 .set(...AUTH)
                 .send({ title: "Renamed" });
             expect(rename.status).toBe(200);
 
-            const del = await request(app)
+            const del = await client.request()
                 .delete("/tabular-review/r1/chats/chat-1")
                 .set(...AUTH);
             expect(del.status).toBe(204);
@@ -2267,7 +2271,7 @@ describe("tabular.routes", () => {
                 projectRole: "editor",
             });
 
-            const rename = await request(app)
+            const rename = await client.request()
                 .patch("/tabular-review/r1/chats/chat-1")
                 .set(...AUTH)
                 .send({ title: "Renamed" });
@@ -2276,7 +2280,7 @@ describe("tabular.routes", () => {
                 "Only the chat's creator can modify it",
             );
 
-            const del = await request(app)
+            const del = await client.request()
                 .delete("/tabular-review/r1/chats/chat-1")
                 .set(...AUTH);
             expect(del.status).toBe(403);
@@ -2302,7 +2306,7 @@ describe("tabular.routes", () => {
                 projectRole: "owner",
             });
 
-            const rename = await request(app)
+            const rename = await client.request()
                 .patch("/tabular-review/r1/chats/chat-1")
                 .set(...AUTH)
                 .send({ title: "Renamed" });
@@ -2316,13 +2320,13 @@ describe("tabular.routes", () => {
             };
             supabaseState.tables.tabular_review_chats = CHAT_IN_R1;
 
-            const rename = await request(app)
+            const rename = await client.request()
                 .patch("/tabular-review/r1/chats/chat-1")
                 .set(...AUTH)
                 .send({ title: "Renamed" });
             expect(rename.status).toBe(200);
 
-            const del = await request(app)
+            const del = await client.request()
                 .delete("/tabular-review/r1/chats/chat-1")
                 .set(...AUTH);
             expect(del.status).toBe(204);

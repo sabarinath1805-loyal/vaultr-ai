@@ -1,5 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import request from "supertest";
+import { afterAll, beforeAll, describe, it, expect, vi, beforeEach } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Hoisted mock fns we reconfigure per-test. These cover the three security
@@ -262,6 +261,11 @@ vi.mock("../../modules/user/user.dataExport", () => ({
 }));
 
 import { app } from "../../app";
+import { createSupertestClient } from "../helpers/supertestClient";
+
+const client = createSupertestClient(app);
+beforeAll(client.start);
+afterAll(client.close);
 
 const AUTH = ["Authorization", "Bearer test"] as const;
 
@@ -351,7 +355,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/user/profile")
                 .set(...AUTH);
 
@@ -390,7 +394,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/user/profile")
                 .set(...AUTH);
 
@@ -416,7 +420,7 @@ describe("user.routes", () => {
                 { data: preMigrationRow, error: null },
             ];
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/user/profile")
                 .set(...AUTH);
 
@@ -447,7 +451,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/user/profile")
                 .set(...AUTH);
 
@@ -496,7 +500,7 @@ describe("user.routes", () => {
                 { data: preMigrationRow, error: null },
             ];
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/user/profile")
                 .set(...AUTH);
 
@@ -531,7 +535,7 @@ describe("user.routes", () => {
                 { data: migration01Row, error: null },
             ];
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/user/profile")
                 .set(...AUTH);
 
@@ -551,7 +555,7 @@ describe("user.routes", () => {
                 error: { message: "db down" },
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/user/profile")
                 .set(...AUTH);
 
@@ -568,7 +572,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/user/profile")
                 .set(...AUTH)
                 .send({ darkMode: true });
@@ -578,7 +582,7 @@ describe("user.routes", () => {
         });
 
         it("rejects a non-boolean darkMode", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/user/profile")
                 .set(...AUTH)
                 .send({ darkMode: "yes" });
@@ -593,7 +597,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/user/profile")
                 .set(...AUTH)
                 .send({ projectMemoryDefault: false });
@@ -606,7 +610,7 @@ describe("user.routes", () => {
         });
 
         it("rejects a non-boolean projectMemoryDefault value", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/user/profile")
                 .set(...AUTH)
                 .send({ projectMemoryDefault: "yes" });
@@ -618,7 +622,7 @@ describe("user.routes", () => {
         });
 
         it("rejects the removed transparentTables preference", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/user/profile")
                 .set(...AUTH)
                 .send({ transparentTables: false });
@@ -633,11 +637,14 @@ describe("user.routes", () => {
     // ── POST /user/profile (bootstrap upsert) ─────────────────────────────
     describe("POST /user/profile", () => {
         it("ensures the profile row and returns ok", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .post("/user/profile")
                 .set(...AUTH);
 
-            expect(res.status).toBe(200);
+            expect(
+                res.status,
+                JSON.stringify({ headers: res.headers, body: res.body, text: res.text }),
+            ).toBe(200);
             expect(res.body).toEqual({ ok: true });
             expect(requireMfaIfEnrolled).not.toHaveBeenCalled();
         });
@@ -646,7 +653,7 @@ describe("user.routes", () => {
     // ── GET /user/api-keys (presence without plaintext) ───────────────────
     describe("GET /user/api-keys", () => {
         it("returns the boolean key-status map", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .get("/user/api-keys")
                 .set(...AUTH);
 
@@ -662,7 +669,7 @@ describe("user.routes", () => {
     // ── PUT /user/api-keys/:provider (crypto + MFA guard) ─────────────────
     describe("PUT /user/api-keys/:provider", () => {
         it("stores the key via the encryption helper and returns status", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .put("/user/api-keys/claude")
                 .set(...AUTH)
                 .send({ api_key: "sk-secret-value" });
@@ -680,7 +687,7 @@ describe("user.routes", () => {
         });
 
         it("deletes the key when api_key is omitted (null value)", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .put("/user/api-keys/openai")
                 .set(...AUTH)
                 .send({});
@@ -695,7 +702,7 @@ describe("user.routes", () => {
         });
 
         it("returns 400 for an unsupported provider", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .put("/user/api-keys/bogus")
                 .set(...AUTH)
                 .send({ api_key: "x" });
@@ -708,7 +715,7 @@ describe("user.routes", () => {
         it("stores a user key when the provider is also configured by the server env", async () => {
             hasEnvApiKey.mockReturnValue(true);
 
-            const res = await request(app)
+            const res = await client.request()
                 .put("/user/api-keys/claude")
                 .set(...AUTH)
                 .send({ api_key: "sk-x" });
@@ -725,7 +732,7 @@ describe("user.routes", () => {
         it("returns 500 when saving the key throws", async () => {
             saveUserApiKey.mockRejectedValue(new Error("kms unavailable"));
 
-            const res = await request(app)
+            const res = await client.request()
                 .put("/user/api-keys/claude")
                 .set(...AUTH)
                 .send({ api_key: "sk-x" });
@@ -737,7 +744,7 @@ describe("user.routes", () => {
         it("is rejected with 403 mfa_verification_required when MFA is unsatisfied", async () => {
             requireMfaIfEnrolled.mockImplementation(rejectMfa);
 
-            const res = await request(app)
+            const res = await client.request()
                 .put("/user/api-keys/claude")
                 .set(...AUTH)
                 .send({ api_key: "sk-x" });
@@ -761,7 +768,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/user/profile")
                 .set(...AUTH)
                 .send({ lastSelectedChatModel: "gpt-5.6-sol" });
@@ -781,7 +788,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/user/profile")
                 .set(...AUTH)
                 .send({ memoryCuratorModel: "gpt-5.4-mini" });
@@ -796,7 +803,7 @@ describe("user.routes", () => {
         });
 
         it("rejects an unsupported memory curator model", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/user/profile")
                 .set(...AUTH)
                 .send({ memoryCuratorModel: "unknown-model" });
@@ -811,7 +818,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/user/profile")
                 .set(...AUTH)
                 .send({
@@ -841,7 +848,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/user/profile")
                 .set(...AUTH)
                 .send({ vercelModels: ["openai/gpt-5.4"] });
@@ -858,7 +865,7 @@ describe("user.routes", () => {
         });
 
         it("rejects a non-boolean Quick Actions visibility preference", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/user/profile")
                 .set(...AUTH)
                 .send({ quickActionsVisible: "yes" });
@@ -875,7 +882,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/user/profile")
                 .set(...AUTH)
                 .send({
@@ -904,7 +911,7 @@ describe("user.routes", () => {
                     error: null,
                 };
 
-                const res = await request(app)
+                const res = await client.request()
                     .patch("/user/profile")
                     .set(...AUTH)
                     .send({ [field]: "x".repeat(250) });
@@ -925,7 +932,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/user/onboarding")
                 .set(...AUTH)
                 .send({
@@ -953,7 +960,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/user/profile")
                 .set(...AUTH);
 
@@ -970,7 +977,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/user/onboarding")
                 .set(...AUTH)
                 .send({ practiceAreas: [] });
@@ -979,7 +986,7 @@ describe("user.routes", () => {
         });
 
         it("rejects an invalid jurisdiction when one is supplied", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .post("/user/onboarding")
                 .set(...AUTH)
                 .send({ jurisdiction: "" });
@@ -989,7 +996,7 @@ describe("user.routes", () => {
         });
 
         it("requires a valid professional setting", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .post("/user/onboarding")
                 .set(...AUTH)
                 .send({
@@ -1010,7 +1017,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/user/onboarding")
                 .set(...AUTH)
                 .send({
@@ -1036,7 +1043,7 @@ describe("user.routes", () => {
                 error: null,
             });
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/user/security/password-set")
                 .set(...AUTH)
                 .send({});
@@ -1056,7 +1063,7 @@ describe("user.routes", () => {
             };
             supabaseRpc.mockResolvedValue({ data: null, error: null });
 
-            const res = await request(app)
+            const res = await client.request()
                 .post("/user/security/password-set")
                 .set(...AUTH)
                 .send({});
@@ -1068,7 +1075,7 @@ describe("user.routes", () => {
     // ── Data export endpoints (MFA-guarded, attachment headers) ───────────
     describe("data export endpoints", () => {
         it("GET /user/export returns the account export as a JSON attachment", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .get("/user/export")
                 .set(...AUTH);
 
@@ -1087,7 +1094,7 @@ describe("user.routes", () => {
         });
 
         it("GET /user/chats/export returns the chats export", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .get("/user/chats/export")
                 .set(...AUTH);
 
@@ -1100,7 +1107,7 @@ describe("user.routes", () => {
         });
 
         it("GET /user/tabular-reviews/export returns the reviews export", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .get("/user/tabular-reviews/export")
                 .set(...AUTH);
 
@@ -1115,7 +1122,7 @@ describe("user.routes", () => {
         it("GET /user/export returns 500 when the builder throws", async () => {
             buildUserAccountExport.mockRejectedValue(new Error("export boom"));
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/user/export")
                 .set(...AUTH);
 
@@ -1126,7 +1133,7 @@ describe("user.routes", () => {
         it("GET /user/export is rejected when MFA is unsatisfied", async () => {
             requireMfaIfEnrolled.mockImplementation(rejectMfa);
 
-            const res = await request(app)
+            const res = await client.request()
                 .get("/user/export")
                 .set(...AUTH);
 
@@ -1139,7 +1146,7 @@ describe("user.routes", () => {
     // ── Data deletion endpoints (MFA-guarded, cleanup helpers) ────────────
     describe("data deletion endpoints", () => {
         it("DELETE /user/chats invokes deleteAllUserChats and returns 204", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/user/chats")
                 .set(...AUTH);
 
@@ -1151,7 +1158,7 @@ describe("user.routes", () => {
         });
 
         it("DELETE /user/projects invokes deleteUserProjects and returns 204", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/user/projects")
                 .set(...AUTH);
 
@@ -1163,7 +1170,7 @@ describe("user.routes", () => {
         });
 
         it("DELETE /user/tabular-reviews invokes the cleanup helper and returns 204", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/user/tabular-reviews")
                 .set(...AUTH);
 
@@ -1175,7 +1182,7 @@ describe("user.routes", () => {
         });
 
         it("DELETE /user/memories wipes app and private-project memory", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/user/memories")
                 .set(...AUTH);
 
@@ -1197,7 +1204,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/user/account")
                 .set(...AUTH);
 
@@ -1226,7 +1233,7 @@ describe("user.routes", () => {
                 { org_id: "o2", name: "Org B", reason: "content" },
             ]);
 
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/user/account")
                 .set(...AUTH);
 
@@ -1256,7 +1263,7 @@ describe("user.routes", () => {
                 { org_id: "o1", name: "Org A", reason: "members" },
             ]);
 
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/user/account")
                 .set(...AUTH);
 
@@ -1268,7 +1275,7 @@ describe("user.routes", () => {
         it("DELETE /user/account runs inline when no runner will drain the queue", async () => {
             dbJobsEnabled.mockReturnValue(false);
 
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/user/account")
                 .set(...AUTH);
 
@@ -1286,7 +1293,7 @@ describe("user.routes", () => {
             dbJobsEnabled.mockReturnValue(false);
             supabaseState.adminDeleteUser = { error: { message: "auth boom" } };
 
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/user/account")
                 .set(...AUTH);
 
@@ -1302,7 +1309,7 @@ describe("user.routes", () => {
                 error: { code: "08006", message: "connection lost" },
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/user/account")
                 .set(...AUTH);
 
@@ -1314,7 +1321,7 @@ describe("user.routes", () => {
         it("DELETE /user/chats returns 500 when cleanup throws", async () => {
             deleteAllUserChats.mockRejectedValue(new Error("cascade failed"));
 
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/user/chats")
                 .set(...AUTH);
 
@@ -1325,7 +1332,7 @@ describe("user.routes", () => {
         it("DELETE /user/account is rejected when MFA is unsatisfied (no cleanup)", async () => {
             requireMfaIfEnrolled.mockImplementation(rejectMfa);
 
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/user/account")
                 .set(...AUTH);
 
@@ -1337,7 +1344,7 @@ describe("user.routes", () => {
         it("DELETE /user/memories is rejected when MFA is unsatisfied", async () => {
             requireMfaIfEnrolled.mockImplementation(rejectMfa);
 
-            const res = await request(app)
+            const res = await client.request()
                 .delete("/user/memories")
                 .set(...AUTH);
 
@@ -1355,7 +1362,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/user/security/mfa-login")
                 .set(...AUTH)
                 .send({ enabled: true });
@@ -1379,7 +1386,7 @@ describe("user.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/user/security/mfa-login")
                 .set(...AUTH)
                 .send({ enabled: true });
@@ -1389,7 +1396,7 @@ describe("user.routes", () => {
         });
 
         it("returns 400 on a non-boolean enabled field", async () => {
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/user/security/mfa-login")
                 .set(...AUTH)
                 .send({ enabled: "yes" });
@@ -1400,7 +1407,7 @@ describe("user.routes", () => {
         it("is rejected with 403 when MFA is unsatisfied", async () => {
             requireMfaIfEnrolled.mockImplementation(rejectMfa);
 
-            const res = await request(app)
+            const res = await client.request()
                 .patch("/user/security/mfa-login")
                 .set(...AUTH)
                 .send({ enabled: false });

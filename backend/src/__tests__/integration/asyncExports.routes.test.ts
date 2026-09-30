@@ -1,5 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import request from "supertest";
+import { afterAll, beforeAll, describe, it, expect, vi, beforeEach } from "vitest";
 
 // ---------------------------------------------------------------------------
 // The async export surface: POST /user/exports (schedule) + GET
@@ -88,6 +87,11 @@ vi.mock("../../lib/dbq/runner", async (importOriginal) => {
 });
 
 import { app } from "../../app";
+import { createSupertestClient } from "../helpers/supertestClient";
+
+const client = createSupertestClient(app);
+beforeAll(client.start);
+afterAll(client.close);
 
 const AUTH = ["Authorization", "Bearer test"] as const;
 
@@ -100,7 +104,7 @@ describe("async exports", () => {
     it("refuses to schedule when no runner will drain the queue", async () => {
         dbJobsEnabled.mockReturnValue(false);
 
-        const res = await request(app)
+        const res = await client.request()
             .post("/user/exports")
             .set(...AUTH)
             .send({ type: "documents-zip", params: { document_ids: ["d1"] } });
@@ -114,18 +118,18 @@ describe("async exports", () => {
 
     it("POST /user/exports is under the export budget; the poll is not", async () => {
         // The budget is 3/hour for this suite; one was spent above.
-        const first = await request(app)
+        const first = await client.request()
             .post("/user/exports")
             .set(...AUTH)
             .send({ type: "account" });
         expect(first.status).toBe(202);
-        const second = await request(app)
+        const second = await client.request()
             .post("/user/exports")
             .set(...AUTH)
             .send({ type: "account" });
         expect(second.status).toBe(202);
 
-        const third = await request(app)
+        const third = await client.request()
             .post("/user/exports")
             .set(...AUTH)
             .send({ type: "account" });
@@ -134,7 +138,7 @@ describe("async exports", () => {
         // Polling an export must stay usable after the POST budget is spent —
         // otherwise a user who scheduled an export cannot watch it finish.
         for (let i = 0; i < 5; i++) {
-            const poll = await request(app)
+            const poll = await client.request()
                 .get("/user/exports/job-1")
                 .set(...AUTH);
             expect(poll.status).not.toBe(429);

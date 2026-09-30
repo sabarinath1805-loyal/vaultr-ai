@@ -1,5 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import request from "supertest";
+import { afterAll, beforeAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Response } from "express";
 
 const authState = vi.hoisted(() => ({ allowed: true, mfa: true }));
@@ -87,6 +86,11 @@ vi.mock("../../lib/integrations/googleDrive", async (importOriginal) => {
 import { app } from "../../app";
 import { ConnectorSetupError } from "../../lib/mcp/errors";
 import { McpOAuthRequiredError } from "../../lib/mcp/oauth";
+import { createSupertestClient } from "../helpers/supertestClient";
+
+const client = createSupertestClient(app);
+beforeAll(client.start);
+afterAll(client.close);
 
 const ORIGINAL_API_PUBLIC_URL = process.env.API_PUBLIC_URL;
 
@@ -116,7 +120,7 @@ describe("POST /user/mcp-connectors", () => {
         mcpConnectorSetupInstructions.mockReturnValue(
             "Slack MCP requires administrator setup.",
         );
-        const res = await request(app).post("/user/mcp-connectors").send({
+        const res = await client.request().post("/user/mcp-connectors").send({
             name: "Slack",
             serverUrl: "https://mcp.slack.com/mcp",
         });
@@ -135,7 +139,7 @@ describe("POST /user/mcp-connectors", () => {
         );
         deleteUserMcpConnector.mockResolvedValue(undefined);
 
-        const res = await request(app).post("/user/mcp-connectors").send({
+        const res = await client.request().post("/user/mcp-connectors").send({
             name: connector.name,
             serverUrl: connector.serverUrl,
         });
@@ -151,7 +155,7 @@ describe("POST /user/mcp-connectors", () => {
         );
         deleteUserMcpConnector.mockRejectedValue(new Error("delete failed"));
 
-        const res = await request(app).post("/user/mcp-connectors").send({
+        const res = await client.request().post("/user/mcp-connectors").send({
             name: connector.name,
             serverUrl: connector.serverUrl,
         });
@@ -171,7 +175,7 @@ describe("POST /user/mcp-connectors", () => {
             new McpOAuthRequiredError(),
         );
 
-        const res = await request(app).post("/user/mcp-connectors").send({
+        const res = await client.request().post("/user/mcp-connectors").send({
             name: connector.name,
             serverUrl: connector.serverUrl,
         });
@@ -189,7 +193,7 @@ describe("POST /user/mcp-connectors", () => {
         createUserMcpConnector.mockResolvedValue(connector);
         refreshUserMcpConnectorTools.mockResolvedValue(refreshedConnector);
 
-        const res = await request(app).post("/user/mcp-connectors").send({
+        const res = await client.request().post("/user/mcp-connectors").send({
             name: connector.name,
             serverUrl: connector.serverUrl,
         });
@@ -214,7 +218,7 @@ describe("POST /user/mcp-connectors/:id/oauth/start", () => {
             },
         );
 
-        const res = await request(app).post("/user/mcp-connectors/c1/oauth/start");
+        const res = await client.request().post("/user/mcp-connectors/c1/oauth/start");
 
         expect(res.status).toBe(400);
         expect(res.body.code).toBe("connector_setup_required");
@@ -229,7 +233,7 @@ describe("POST /user/mcp-connectors/:id/oauth/start", () => {
             ),
         );
 
-        const res = await request(app).post("/user/mcp-connectors/c1/oauth/start");
+        const res = await client.request().post("/user/mcp-connectors/c1/oauth/start");
 
         expect(res.status).toBe(400);
         expect(res.body).toEqual({
@@ -250,7 +254,7 @@ describe("POST /user/mcp-connectors/:id/refresh-tools", () => {
             new McpOAuthRequiredError(),
         );
 
-        const res = await request(app).post(
+        const res = await client.request().post(
             "/user/mcp-connectors/c1/refresh-tools",
         );
 
@@ -273,7 +277,7 @@ describe("POST /user/integrations/google-drive/oauth/start", () => {
             },
         );
 
-        const res = await request(app).post(
+        const res = await client.request().post(
             "/user/integrations/google-drive/oauth/start",
         );
 
@@ -291,7 +295,7 @@ describe("POST /user/integrations/google-drive/oauth/start", () => {
             ),
         );
 
-        const res = await request(app).post(
+        const res = await client.request().post(
             "/user/integrations/google-drive/oauth/start",
         );
 
@@ -311,7 +315,7 @@ describe("GET /user/integrations/google-drive", () => {
             schemaReady: true,
         });
 
-        const res = await request(app).get("/user/integrations/google-drive");
+        const res = await client.request().get("/user/integrations/google-drive");
 
         expect(res.status).toBe(200);
         expect(res.body).toEqual({
@@ -328,7 +332,7 @@ describe("GET /user/integrations/google-drive", () => {
 describe("Google Drive callback and disconnect", () => {
     it("completes only for the authenticated Mike user", async () => {
         completeGoogleDriveOAuth.mockResolvedValue({ userId: "u1" });
-        const res = await request(app).get(
+        const res = await client.request().get(
             "/user/integrations/google-drive/oauth/finish?state=s&code=c",
         );
         expect(res.status).toBe(200);
@@ -348,7 +352,7 @@ describe("Google Drive callback and disconnect", () => {
         completeGoogleDriveOAuth.mockRejectedValue(
             new Error("secret-internal-sentinel</script>"),
         );
-        const res = await request(app).get(
+        const res = await client.request().get(
             "/user/integrations/google-drive/oauth/finish?state=s&code=c",
         );
         expect(res.status).toBe(400);
@@ -362,7 +366,7 @@ describe("Google Drive callback and disconnect", () => {
     });
 
     it("sanitizes denied and missing-parameter callbacks without contacting Google", async () => {
-        const res = await request(app).get(
+        const res = await client.request().get(
             "/user/integrations/google-drive/oauth/finish?error=secret-sentinel",
         );
         expect(res.status).toBe(400);
@@ -370,7 +374,7 @@ describe("Google Drive callback and disconnect", () => {
         expect(completeGoogleDriveOAuth).not.toHaveBeenCalled();
         expect(
             (
-                await request(app).get(
+                await client.request().get(
                     "/user/integrations/google-drive/oauth/finish",
                 )
             ).status,
@@ -379,7 +383,7 @@ describe("Google Drive callback and disconnect", () => {
 
     it("disconnects only the authenticated user", async () => {
         disconnectGoogleDrive.mockResolvedValue(undefined);
-        const res = await request(app).delete(
+        const res = await client.request().delete(
             "/user/integrations/google-drive",
         );
         expect(res.status).toBe(204);
@@ -393,8 +397,8 @@ describe("Google Drive callback and disconnect", () => {
         disconnectGoogleDrive.mockRejectedValue(new Error("secret-sentinel"));
         getGoogleDriveStatus.mockRejectedValue(new Error("secret-sentinel"));
         for (const res of [
-            await request(app).delete("/user/integrations/google-drive"),
-            await request(app).get("/user/integrations/google-drive"),
+            await client.request().delete("/user/integrations/google-drive"),
+            await client.request().get("/user/integrations/google-drive"),
         ]) {
             expect(res.status).toBe(500);
             expect(res.text).not.toContain("secret-sentinel");
@@ -404,7 +408,7 @@ describe("Google Drive callback and disconnect", () => {
     it("cancels only the caller's selected pending state", async () => {
         cancelGoogleDriveOAuth.mockResolvedValue(undefined);
         const state = "a".repeat(32);
-        const res = await request(app)
+        const res = await client.request()
             .post("/user/integrations/google-drive/oauth/cancel")
             .send({ state, userId: "attacker-chosen" });
         expect(res.status).toBe(204);
@@ -415,7 +419,7 @@ describe("Google Drive callback and disconnect", () => {
         );
         expect(
             (
-                await request(app)
+                await client.request()
                     .post("/user/integrations/google-drive/oauth/cancel")
                     .send({ state: "bad" })
             ).status,
@@ -430,7 +434,7 @@ it.each([
     authState.allowed = false;
     expect(
         (
-            await request(app)
+            await client.request()
                 .post(path)
                 .send({ state: "a".repeat(32) })
         ).status,
@@ -439,7 +443,7 @@ it.each([
     authState.mfa = false;
     expect(
         (
-            await request(app)
+            await client.request()
                 .post(path)
                 .send({ state: "a".repeat(32) })
         ).status,
@@ -451,12 +455,12 @@ it.each([
 it("requires authentication and MFA to disconnect Drive", async () => {
     authState.allowed = false;
     expect(
-        (await request(app).delete("/user/integrations/google-drive")).status,
+        (await client.request().delete("/user/integrations/google-drive")).status,
     ).toBe(401);
     authState.allowed = true;
     authState.mfa = false;
     expect(
-        (await request(app).delete("/user/integrations/google-drive")).status,
+        (await client.request().delete("/user/integrations/google-drive")).status,
     ).toBe(403);
     expect(disconnectGoogleDrive).not.toHaveBeenCalled();
 });

@@ -1,6 +1,5 @@
 import express from "express";
-import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   copyFile: vi.fn(),
@@ -143,6 +142,11 @@ import { uploadSessionsRouter } from "../../modules/uploads/uploads.routes";
 const app = express();
 app.use(express.json());
 app.use("/upload-sessions", uploadSessionsRouter);
+import { createSupertestClient } from "../helpers/supertestClient";
+
+const client = createSupertestClient(app);
+beforeAll(client.start);
+afterAll(client.close);
 
 describe("upload session completion", () => {
   beforeEach(() => {
@@ -204,7 +208,7 @@ describe("upload session completion", () => {
         contentType: "application/pdf",
       });
 
-    const response = await request(app).post(
+    const response = await client.request().post(
       "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
     );
 
@@ -237,7 +241,7 @@ describe("upload session completion", () => {
       contentType: "application/pdf",
     });
 
-    const response = await request(app).post(
+    const response = await client.request().post(
       "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
     );
 
@@ -270,7 +274,7 @@ describe("upload session completion", () => {
       }),
     );
 
-    const response = await request(app).post(
+    const response = await client.request().post(
       "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
     );
 
@@ -304,7 +308,7 @@ describe("upload session completion", () => {
         contentType: "application/pdf",
       });
 
-    const response = await request(app).post(
+    const response = await client.request().post(
       "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
     );
 
@@ -329,7 +333,7 @@ describe("upload session completion", () => {
   });
 
   it("does not expose session-wide completion", async () => {
-    const response = await request(app).post(
+    const response = await client.request().post(
       "/upload-sessions/22222222-2222-4222-8222-222222222222/complete",
     );
 
@@ -339,7 +343,7 @@ describe("upload session completion", () => {
   });
 
   it("cancels a pending session and deletes both temporary object keys", async () => {
-    const response = await request(app).delete(
+    const response = await client.request().delete(
       "/upload-sessions/22222222-2222-4222-8222-222222222222",
     );
 
@@ -353,7 +357,7 @@ describe("upload session completion", () => {
   });
 
   it("refreshes PUT URLs for files that have not been verified", async () => {
-    const response = await request(app).post(
+    const response = await client.request().post(
       "/upload-sessions/22222222-2222-4222-8222-222222222222/urls",
     );
 
@@ -376,7 +380,7 @@ describe("upload session completion", () => {
       project_id: "77777777-7777-4777-8777-777777777777",
     };
 
-    const response = await request(app).post(
+    const response = await client.request().post(
       "/upload-sessions/22222222-2222-4222-8222-222222222222/urls",
     );
 
@@ -394,7 +398,7 @@ describe("upload session completion", () => {
       project_id: "77777777-7777-4777-8777-777777777777",
     };
 
-    const response = await request(app).post(
+    const response = await client.request().post(
       "/upload-sessions/22222222-2222-4222-8222-222222222222/urls",
     );
 
@@ -407,7 +411,7 @@ describe("upload session completion", () => {
     mocks.files[0]!.status = "verifying";
     mocks.files[0]!.updated_at = new Date().toISOString();
 
-    const response = await request(app).post(
+    const response = await client.request().post(
       "/upload-sessions/22222222-2222-4222-8222-222222222222/urls",
     );
 
@@ -419,7 +423,7 @@ describe("upload session completion", () => {
     mocks.files[0]!.status = "verifying";
     mocks.files[0]!.updated_at = "2000-01-01T00:00:00.000Z";
 
-    const response = await request(app).post(
+    const response = await client.request().post(
       "/upload-sessions/22222222-2222-4222-8222-222222222222/urls",
     );
 
@@ -433,7 +437,7 @@ describe("upload session completion", () => {
       return { size: 4, etag: "sealed-etag", contentType: "application/pdf" };
     });
 
-    const response = await request(app).post(
+    const response = await client.request().post(
       "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
     );
 
@@ -460,7 +464,7 @@ describe("upload session completion", () => {
         contentType: "application/pdf",
       });
 
-    const response = await request(app).post(
+    const response = await client.request().post(
       "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
     );
 
@@ -482,7 +486,7 @@ describe("upload session completion", () => {
     mocks.files[0]!.status = "uploaded";
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-    const response = await request(app).post(
+    const response = await client.request().post(
       "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
     );
 
@@ -492,7 +496,7 @@ describe("upload session completion", () => {
   });
 
   it("does not extend the deadline when the client reports a failed transfer", async () => {
-    const response = await request(app)
+    const response = await client.request()
       .post(
         "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
       )
@@ -512,7 +516,7 @@ describe("upload session completion", () => {
       contentType: "application/pdf",
     });
 
-    const response = await request(app).post(
+    const response = await client.request().post(
       "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
     );
 
@@ -542,7 +546,7 @@ describe("upload session completion", () => {
     });
     mocks.files[0]!.status = "completed";
 
-    const response = await request(app)
+    const response = await client.request()
       .post(
         "/upload-sessions/22222222-2222-4222-8222-222222222222/files/55555555-5555-4555-8555-555555555555/complete",
       )
@@ -580,7 +584,7 @@ describe("upload session completion", () => {
       status: "pending_upload",
     });
 
-    const response = await request(app)
+    const response = await client.request()
       .post(
         "/upload-sessions/22222222-2222-4222-8222-222222222222/files/55555555-5555-4555-8555-555555555555/complete",
       )
@@ -610,7 +614,7 @@ describe("upload session completion", () => {
       contentType: "text/plain",
     });
 
-    const response = await request(app).post(
+    const response = await client.request().post(
       "/upload-sessions/22222222-2222-4222-8222-222222222222/files/33333333-3333-4333-8333-333333333333/complete",
     );
 
@@ -626,7 +630,7 @@ describe("upload session completion", () => {
     mocks.session!.status = "verifying";
     mocks.session!.updated_at = "2000-01-01T00:00:00.000Z";
 
-    const response = await request(app).delete(
+    const response = await client.request().delete(
       "/upload-sessions/22222222-2222-4222-8222-222222222222",
     );
 
