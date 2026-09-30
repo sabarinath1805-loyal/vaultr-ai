@@ -1,7 +1,11 @@
 // Read/serve paths for documents: inline display bytes, zip bundling, signed
 // download URLs, and the raw source bytes of a version.
 
-import { getSignedUrl, headFile } from "../../lib/storage";
+import {
+    getSignedUrl,
+    headFile,
+    SIGNED_DOCUMENT_GET_TTL_SECONDS,
+} from "../../lib/storage";
 import {
     attachActiveVersionPaths,
     loadActiveVersion,
@@ -393,7 +397,11 @@ export async function getDownloadUrl(
         active.version_number,
         active.source === "assistant_edit",
     );
-    const url = await getSignedUrl(active.storage_path, 3600, downloadFilename);
+    const url = await getSignedUrl(
+        active.storage_path,
+        SIGNED_DOCUMENT_GET_TTL_SECONDS,
+        downloadFilename,
+    );
     if (!url)
         return { ok: false, kind: "storage", detail: "Storage not configured" };
 

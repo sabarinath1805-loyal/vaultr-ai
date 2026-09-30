@@ -91,6 +91,10 @@ import {
   ensureDocAccess,
   ensureReviewAccess,
 } from "../../../../lib/access";
+import {
+  runToolAuthorizationBoundary,
+  toolCapabilityFor,
+} from "./toolCapabilities";
 
 const ACCESS_REVOKED_TOOL_ERROR = "This resource is no longer available.";
 
@@ -643,26 +647,30 @@ export async function runToolCalls(
       /* ignore */
     }
 
-    const isExternalAction =
-      tc.function.name.startsWith(GOOGLE_DRIVE_TOOL_PREFIX) ||
-      isGoogleWorkspaceTool(tc.function.name) ||
-      tc.function.name.startsWith("mcp_") ||
-      Object.values(COURTLISTENER_TOOL_NAMES).includes(
-        tc.function.name as (typeof COURTLISTENER_TOOL_NAMES)[keyof typeof COURTLISTENER_TOOL_NAMES],
-      );
-    if (
-      isExternalAction &&
-      !(await authorizeCurrentTurnContext(
-        projectId,
-        tabularStore,
-        userId,
-        userEmail,
-        db,
-        docStore,
-        docIndex,
-        workflowsApplied.map((workflow) => workflow.workflow_id),
-      ))
-    ) {
+    const capability = toolCapabilityFor(tc.function.name);
+    if (!capability) {
+      toolResults.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: JSON.stringify({ ok: false, error: "Tool is unavailable." }),
+      });
+      continue;
+    }
+    const allowedByBoundary = await runToolAuthorizationBoundary(
+      capability,
+      () =>
+        authorizeCurrentTurnContext(
+          projectId,
+          tabularStore,
+          userId,
+          userEmail,
+          db,
+          docStore,
+          docIndex,
+          workflowsApplied.map((workflow) => workflow.workflow_id),
+        ),
+    );
+    if (!allowedByBoundary) {
       toolResults.push({
         role: "tool",
         tool_call_id: tc.id,

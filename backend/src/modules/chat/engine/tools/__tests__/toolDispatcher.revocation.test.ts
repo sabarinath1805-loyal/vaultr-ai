@@ -135,14 +135,14 @@ describe("tool dispatch revalidates captured authority", () => {
       "user@example.com",
     );
 
-    expect(db.from).toHaveBeenCalledWith("documents");
-    expect(mocks.ensureDocAccess).toHaveBeenCalledWith(
-      documentRow,
+    expect(mocks.checkProjectAccess).toHaveBeenCalledWith(
+      "project-1",
       "user-1",
       "user@example.com",
       db,
     );
     expect(mocks.readDocumentContent).not.toHaveBeenCalled();
+    expect(mocks.downloadFile).not.toHaveBeenCalled();
     expect(JSON.stringify(result.toolResults)).not.toContain("confidential source text");
   });
 
@@ -262,7 +262,7 @@ describe("tool dispatch revalidates captured authority", () => {
     );
   });
 
-  it("does not copy a still-readable source into a destination after edit access is revoked", async () => {
+  it("does not read or copy a source when destination edit access is revoked", async () => {
     mocks.ensureDocAccess.mockResolvedValue({ ok: true, projectRole: "editor" });
     mocks.checkProjectAccess
       .mockResolvedValueOnce({ ok: true, projectRole: "editor" })
@@ -287,7 +287,7 @@ describe("tool dispatch revalidates captured authority", () => {
       "user@example.com",
     );
 
-    expect(mocks.downloadFile).toHaveBeenCalledOnce();
+    expect(mocks.downloadFile).not.toHaveBeenCalled();
     expect(mocks.uploadFile).not.toHaveBeenCalled();
     expect(JSON.stringify(result.toolResults)).toContain(
       "This resource is no longer available.",

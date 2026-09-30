@@ -24,6 +24,7 @@ import {
   deleteFilesBestEffort,
   getSignedUploadUrl,
   headFile,
+  SIGNED_UPLOAD_PUT_TTL_SECONDS,
   StorageOperationError,
 } from "../../lib/storage";
 import type { Db } from "../../lib/supabase";
@@ -91,7 +92,10 @@ async function signPendingFiles(
   files: Array<UploadSessionFileRow | UploadSessionFile>,
   expiresAt: string,
 ) {
-  const ttl = signedUrlTtl(expiresAt);
+  const ttl = Math.min(
+    signedUrlTtl(expiresAt),
+    SIGNED_UPLOAD_PUT_TTL_SECONDS,
+  );
   return await Promise.all(
     files.map(async (file) => {
       const url = await getSignedUploadUrl(

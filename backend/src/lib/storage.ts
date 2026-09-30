@@ -23,6 +23,7 @@ import { bestEffort } from "./observability/sentry";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
+import { randomUUID } from "node:crypto";
 
 const GetObjectCommand = (S3Commands as any).GetObjectCommand;
 
@@ -40,6 +41,36 @@ const CHECKSUM_DEFAULTS = {
   requestChecksumCalculation: "WHEN_REQUIRED",
   responseChecksumValidation: "WHEN_REQUIRED",
 } as const;
+
+/** Maximum lifetime for browser-held upload and download capabilities. */
+export const MAX_SIGNED_URL_TTL_SECONDS = 900;
+/** Direct upload PUT URLs remain short-lived and bind type and byte count. */
+export const SIGNED_UPLOAD_PUT_TTL_SECONDS = 900;
+/** Document GET URLs are renewed through an authorization-checked API route. */
+export const SIGNED_DOCUMENT_GET_TTL_SECONDS = 900;
+
+function clampSignedUrlTtl(expiresIn: number, fallback: number): number {
+  if (!Number.isFinite(expiresIn)) return fallback;
+  return Math.max(1, Math.min(MAX_SIGNED_URL_TTL_SECONDS, Math.floor(expiresIn)));
+}
+
+/** Avoid logging storage keys or raw provider exception text on presign errors. */
+function logPresignFailure(operation: string, error: unknown): void {
+  const status =
+    error && typeof error === "object"
+      ? (error as { $metadata?: { httpStatusCode?: unknown } }).$metadata
+          ?.httpStatusCode
+      : undefined;
+  const errorCode =
+    typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599
+      ? `HTTP_${status}`
+      : "PRESIGN_FAILED";
+  console.error("[storage] presign failed", {
+    operation,
+    error_code: errorCode,
+    correlation_id: randomUUID(),
+  });
+}
 
 function getClient(): S3Client {
   if (!cachedClient) {
@@ -157,7 +188,7 @@ export async function getSignedUploadUrl(
   key: string,
   contentType: string,
   expectedSizeBytes: number,
-  expiresIn = 900,
+  expiresIn = SIGNED_UPLOAD_PUT_TTL_SECONDS,
 ): Promise<string | null> {
   if (!storageEnabled) return null;
   try {
@@ -171,12 +202,15 @@ export async function getSignedUploadUrl(
         ContentLength: expectedSizeBytes,
       }),
       {
-        expiresIn,
+        expiresIn: clampSignedUrlTtl(
+          expiresIn,
+          SIGNED_UPLOAD_PUT_TTL_SECONDS,
+        ),
         signableHeaders: new Set(["content-type", "content-length"]),
       },
     );
   } catch (error) {
-    console.error("[storage] getSignedUploadUrl failed", { key, error });
+    logPresignFailure("getSignedUploadUrl", error);
     return null;
   }
 }
@@ -397,7 +431,7 @@ export function deleteFilesBestEffort(
 
 export async function getSignedUrl(
   key: string,
-  expiresIn = 3600,
+  expiresIn = SIGNED_DOCUMENT_GET_TTL_SECONDS,
   downloadFilename?: string,
 ): Promise<string | null> {
   if (!storageEnabled) return null;
@@ -415,12 +449,11 @@ export async function getSignedUrl(
       Key: key,
       ResponseContentDisposition: responseContentDisposition,
     }) as any;
-    return await awsGetSignedUrl(client, command, { expiresIn });
-  } catch (error) {
-    console.error("[storage] getSignedUrl failed", {
-      key,
-      error: error,
+    return await awsGetSignedUrl(client, command, {
+      expiresIn: clampSignedUrlTtl(expiresIn, SIGNED_DOCUMENT_GET_TTL_SECONDS),
     });
+  } catch (error) {
+    logPresignFailure("getSignedUrl", error);
     return null;
   }
 }

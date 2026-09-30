@@ -37,6 +37,7 @@ import {
   isDocumentMutatingTool,
   withoutDocumentMutatingTools,
 } from "./tools/toolSchemas";
+import { assertServerToolCapabilities } from "./tools/toolCapabilities";
 import {
   parseCitationsWithDiagnostics,
   parsePartialCitationObjects,
@@ -300,14 +301,15 @@ export async function runLLMStream(params: {
     ? TOOLS
     : TOOLS.filter((tool) => tool.function.name !== "ask_inputs");
   const baseTools = [...conversationTools, ...researchTools, ...WORKFLOW_TOOLS];
-  const advertisedTools = [
+  const serverTools = [
     ...baseTools,
     ...mcpTools,
     ...googleDriveTools,
     ...(await buildGoogleWorkspaceTools(userId, db)),
     ...(extraTools ?? []),
-    ...(clientTools?.schemas ?? []),
   ];
+  assertServerToolCapabilities(serverTools);
+  const advertisedTools = [...serverTools, ...(clientTools?.schemas ?? [])];
   // Hiding the schema is the first half of the gate: a tool the model was
   // never shown is a tool it will not plan around. The second half is in
   // `runTools` below, because "not advertised" is not "not callable" — a

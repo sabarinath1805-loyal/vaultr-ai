@@ -3,9 +3,17 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 // Exercises the real AWS SDK signer: presigning is offline, so this catches
 // query parameters the SDK adds on its own.
 let getSignedUploadUrl: typeof import("../storage").getSignedUploadUrl;
+let getSignedUrl: typeof import("../storage").getSignedUrl;
+let SIGNED_DOCUMENT_GET_TTL_SECONDS: typeof import("../storage").SIGNED_DOCUMENT_GET_TTL_SECONDS;
+let SIGNED_UPLOAD_PUT_TTL_SECONDS: typeof import("../storage").SIGNED_UPLOAD_PUT_TTL_SECONDS;
+let MAX_SIGNED_URL_TTL_SECONDS: typeof import("../storage").MAX_SIGNED_URL_TTL_SECONDS;
 
 function signedHeaders(url: string): string {
   return new URL(url).searchParams.get("X-Amz-SignedHeaders") ?? "";
+}
+
+function signedExpiry(url: string): number {
+  return Number(new URL(url).searchParams.get("X-Amz-Expires"));
 }
 
 beforeAll(async () => {
@@ -15,7 +23,13 @@ beforeAll(async () => {
   process.env.R2_SECRET_ACCESS_KEY = "test-secret-key";
   process.env.R2_BUCKET_NAME = "mike";
   vi.resetModules();
-  ({ getSignedUploadUrl } = await import("../storage.js"));
+  ({
+    getSignedUploadUrl,
+    getSignedUrl,
+    SIGNED_DOCUMENT_GET_TTL_SECONDS,
+    SIGNED_UPLOAD_PUT_TTL_SECONDS,
+    MAX_SIGNED_URL_TTL_SECONDS,
+  } = await import("../storage.js"));
 });
 
 describe("signed direct-upload URLs", () => {
@@ -51,5 +65,35 @@ describe("signed direct-upload URLs", () => {
     expect(new URL(small!).searchParams.get("X-Amz-Signature")).not.toBe(
       new URL(large!).searchParams.get("X-Amz-Signature"),
     );
+  });
+
+  it("keeps upload PUT lifetime at 900 seconds and clamps larger requests", async () => {
+    expect(SIGNED_UPLOAD_PUT_TTL_SECONDS).toBe(900);
+    expect(MAX_SIGNED_URL_TTL_SECONDS).toBe(900);
+    const defaultUrl = await getSignedUploadUrl(
+      "upload-sessions/u1/s1/f1/staging",
+      "application/pdf",
+      1234,
+    );
+    const clampedUrl = await getSignedUploadUrl(
+      "upload-sessions/u1/s1/f1/staging",
+      "application/pdf",
+      1234,
+      3600,
+    );
+
+    expect(signedExpiry(defaultUrl!)).toBe(900);
+    expect(signedExpiry(clampedUrl!)).toBe(900);
+  });
+
+  it("defaults document GET lifetime to 900 seconds and clamps larger requests", async () => {
+    expect(SIGNED_DOCUMENT_GET_TTL_SECONDS).toBe(900);
+    const defaultUrl = await getSignedUrl("documents/u1/d1/source.pdf");
+    const shortUrl = await getSignedUrl("documents/u1/d1/source.pdf", 120);
+    const clampedUrl = await getSignedUrl("documents/u1/d1/source.pdf", 3600);
+
+    expect(signedExpiry(defaultUrl!)).toBe(900);
+    expect(signedExpiry(shortUrl!)).toBe(120);
+    expect(signedExpiry(clampedUrl!)).toBe(900);
   });
 });

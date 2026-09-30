@@ -142,22 +142,48 @@ describe("storage error logging", () => {
     log.mockRestore();
   });
 
-  it("logs signed-URL failures with the object key and a safe error", async () => {
-    const failure = new Error("signing failed");
+  it("redacts generic presign failures while retaining a correlation id", async () => {
+    const key = "private/path/secret-object-key.pdf";
+    const failure = new Error("provider response contains secret detail");
     mocks.getSignedUrl.mockRejectedValue(failure);
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
+    await expect(getSignedUrl(key)).resolves.toBeNull();
+
+    expect(log).toHaveBeenCalledWith(
+      "[storage] presign failed",
+      expect.objectContaining({
+        operation: "getSignedUrl",
+        error_code: "PRESIGN_FAILED",
+        correlation_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      }),
+    );
+    const serializedLogs = JSON.stringify(log.mock.calls);
+    expect(serializedLogs).not.toContain(key);
+    expect(serializedLogs).not.toContain("provider response contains secret detail");
+    log.mockRestore();
+  });
+
+  it("redacts signed upload presign failures too", async () => {
+    const key = "upload-sessions/u1/s1/private-staging-key";
+    mocks.getSignedUrl.mockRejectedValue(new Error("raw provider failure text"));
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
     await expect(
-      getSignedUrl("documents/u1/d1/source.pdf"),
+      getSignedUploadUrl(key, "application/pdf", 1234),
     ).resolves.toBeNull();
 
-    expect(log).toHaveBeenCalledWith("[storage] getSignedUrl failed", {
-      key: "documents/u1/d1/source.pdf",
-      error: expect.objectContaining({
-        name: "Error",
-        message: "signing failed",
+    expect(log).toHaveBeenCalledWith(
+      "[storage] presign failed",
+      expect.objectContaining({
+        operation: "getSignedUploadUrl",
+        error_code: "PRESIGN_FAILED",
+        correlation_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
       }),
-    });
+    );
+    const serializedLogs = JSON.stringify(log.mock.calls);
+    expect(serializedLogs).not.toContain(key);
+    expect(serializedLogs).not.toContain("raw provider failure text");
     log.mockRestore();
   });
 });

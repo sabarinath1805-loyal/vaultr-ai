@@ -128,7 +128,7 @@ import {
     handleExportBuild,
     MAX_ZIP_EXPORT_DOCUMENTS,
 } from "../../../jobs/registry";
-import { NonRetryableJobError } from "../runner";
+import { NonRetryableJobError, processClaimedJob } from "../runner";
 import type { DbJob } from "../types";
 
 const JOB = (kind: string, payload: Record<string, unknown>): DbJob => ({
@@ -214,6 +214,46 @@ function makeDb(selectData: unknown[] = []) {
         trace,
         from,
         auth: { admin: { deleteUser: authDeleteUser } },
+    };
+}
+
+function makeExportWorkerDb(documentRows: unknown[]) {
+    const domainDb = makeDb(documentRows);
+    const jobUpdates: Array<{
+        payload: Record<string, unknown>;
+        filters: Record<string, unknown>;
+    }> = [];
+    function from(table: string) {
+        if (table !== "db_jobs") return domainDb.from();
+        const state: {
+            payload: Record<string, unknown>;
+            filters: Record<string, unknown>;
+        } = { payload: {}, filters: {} };
+        const builder: Record<string, unknown> = {
+            update(payload: Record<string, unknown>) {
+                state.payload = payload;
+                return builder;
+            },
+            eq(column: string, value: unknown) {
+                state.filters[column] = value;
+                return builder;
+            },
+            then(onFulfilled: (value: unknown) => unknown) {
+                jobUpdates.push({
+                    payload: { ...state.payload },
+                    filters: { ...state.filters },
+                });
+                return Promise.resolve({ data: null, error: null }).then(
+                    onFulfilled,
+                );
+            },
+        };
+        return builder;
+    }
+    return {
+        ...domainDb,
+        jobUpdates,
+        from,
     };
 }
 
@@ -634,5 +674,65 @@ describe("handleExportBuild", () => {
             ).rejects.toThrow(/malformed payload/);
         }
         expect(uploadFile).not.toHaveBeenCalled();
+    });
+
+    it("retries a queued export after revocation, then fails without an artifact", async () => {
+        const db = makeExportWorkerDb([
+            { id: "d1", user_id: "owner", project_id: "p1" },
+        ]);
+        // The job represents an export already accepted and queued while the
+        // user had access. The worker sees the current revoked state each time.
+        ensureDocAccess.mockResolvedValue({ ok: false });
+        const queued = JOB("export.build", {
+            userId: "u1",
+            type: "documents-zip",
+            document_ids: ["d1"],
+        });
+
+        for (const attempts of [1, 2, 3]) {
+            await processClaimedJob(
+                db as never,
+                { "export.build": handleExportBuild },
+                {
+                    ...queued,
+                    status: "running",
+                    attempts,
+                    claimed_at: `2026-09-30T00:00:0${attempts}Z`,
+                },
+            );
+        }
+
+        expect(ensureDocAccess).toHaveBeenCalledTimes(3);
+        expect(db.jobUpdates.map((update) => update.payload.status)).toEqual([
+            "pending",
+            "pending",
+            "failed",
+        ]);
+        expect(uploadFile).not.toHaveBeenCalled();
+        expect(loadActiveVersion).not.toHaveBeenCalled();
+        expect(downloadFile).not.toHaveBeenCalled();
+    });
+
+    it("completes the same queued export when access is still authorized", async () => {
+        const db = makeExportWorkerDb([
+            { id: "d1", user_id: "owner", project_id: "p1" },
+        ]);
+        ensureDocAccess.mockResolvedValue({ ok: true });
+        downloadFile.mockResolvedValue(new Uint8Array([80, 75, 3, 4]));
+        const queued = JOB("export.build", {
+            userId: "u1",
+            type: "documents-zip",
+            document_ids: ["d1"],
+        });
+
+        await processClaimedJob(
+            db as never,
+            { "export.build": handleExportBuild },
+            queued,
+        );
+
+        expect(ensureDocAccess).toHaveBeenCalledOnce();
+        expect(uploadFile).toHaveBeenCalledOnce();
+        expect(db.jobUpdates[0].payload.status).toBe("done");
     });
 });
