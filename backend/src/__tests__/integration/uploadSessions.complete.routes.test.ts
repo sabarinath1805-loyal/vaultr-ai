@@ -123,6 +123,7 @@ const { StorageOperationError } = vi.hoisted(() => {
 
 vi.mock("../../lib/storage", () => ({
   StorageOperationError,
+  SIGNED_UPLOAD_PUT_TTL_SECONDS: 900,
   storageEnabled: true,
   getSignedUploadUrl: mocks.getSignedUploadUrl,
   copyFile: mocks.copyFile,
@@ -370,7 +371,7 @@ describe("upload session completion", () => {
       "staging-key",
       "application/pdf",
       4,
-      expect.any(Number),
+      900,
     );
   });
 

@@ -29,7 +29,15 @@ vi.mock("../../lib/supabase", () => ({
     // then hand the verdict to lib/access.
     from: () => {
       const query: Record<string, unknown> = {};
-      for (const method of ["select", "eq", "in", "is", "order", "limit"])
+      for (const method of [
+        "select",
+        "update",
+        "eq",
+        "in",
+        "is",
+        "order",
+        "limit",
+      ])
         query[method] = () => query;
       query.maybeSingle = async () => mocks.documentRow;
       query.single = query.maybeSingle;
@@ -50,6 +58,7 @@ vi.mock("../../lib/access", async (importOriginal) => ({
 }));
 
 vi.mock("../../lib/storage", () => ({
+  SIGNED_UPLOAD_PUT_TTL_SECONDS: 900,
   storageEnabled: true,
   getSignedUploadUrl: mocks.getSignedUploadUrl,
   copyFile: vi.fn(),
@@ -117,7 +126,7 @@ describe("upload session routes", () => {
       expect.any(String),
       "application/pdf",
       1234,
-      expect.any(Number),
+      900,
     );
     expect(response.body.files[0].upload.headers).not.toHaveProperty(
       "Content-Length",

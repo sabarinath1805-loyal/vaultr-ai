@@ -31,7 +31,10 @@ function toolNames(tools: readonly { function: { name: string } }[]) {
     return tools.map((tool) => tool.function.name);
 }
 
-function replicationDb(callOrder: string[] = []) {
+function replicationDb(
+    callOrder: string[] = [],
+    accessibleDocumentIds: string[] = ["asset-1"],
+) {
     const documentRows: Record<string, unknown>[][] = [];
     const versionRows: Record<string, unknown>[][] = [];
     const db = {
@@ -51,13 +54,18 @@ function replicationDb(callOrder: string[] = []) {
                 },
                 maybeSingle: async () => ({
                     data:
-                        table === "documents" && filters.id === "asset-1"
+                        table === "documents" &&
+                        accessibleDocumentIds.includes(String(filters.id))
                             ? {
-                                  id: "asset-1",
-                                  user_id: null,
+                                  id: filters.id,
+                                  user_id:
+                                      filters.id === "asset-1" ? null : "user-1",
                                   project_id: null,
                                   org_id: null,
-                                  workflow_id: "workflow-1",
+                                  workflow_id:
+                                      filters.id === "asset-1"
+                                          ? "workflow-1"
+                                          : null,
                                   current_version_id: null,
                               }
                             : table === "workflows"
@@ -77,13 +85,18 @@ function replicationDb(callOrder: string[] = []) {
                 }),
                 single: async () => ({
                     data:
-                        table === "documents" && filters.id === "asset-1"
+                        table === "documents" &&
+                        accessibleDocumentIds.includes(String(filters.id))
                             ? {
-                                  id: "asset-1",
-                                  user_id: null,
+                                  id: filters.id,
+                                  user_id:
+                                      filters.id === "asset-1" ? null : "user-1",
                                   project_id: null,
                                   org_id: null,
-                                  workflow_id: "workflow-1",
+                                  workflow_id:
+                                      filters.id === "asset-1"
+                                          ? "workflow-1"
+                                          : null,
                                   current_version_id: null,
                               }
                             : null,
@@ -423,6 +436,13 @@ describe("workflow asset replication", () => {
                 },
             ],
         ]);
+        const { db } = replicationDb();
+        const index: DocIndex = {
+            [sourceLabel]: {
+                document_id: "asset-1",
+                filename: "Template.docx",
+            },
+        };
 
         const result = await runToolCalls(
             [
@@ -436,11 +456,11 @@ describe("workflow asset replication", () => {
             ],
             store,
             "user-1",
-            {} as never,
+            db as never,
             () => undefined,
             undefined,
             undefined,
-            {},
+            index,
         );
 
         expect(JSON.stringify(result.toolResults)).toContain("A new_filename is required");
@@ -459,6 +479,7 @@ describe("workflow asset replication", () => {
                 },
             ],
         ]);
+        const { db } = replicationDb([], ["template-document"]);
 
         const result = await runToolCalls(
             [
@@ -475,7 +496,7 @@ describe("workflow asset replication", () => {
             ],
             store,
             "user-1",
-            {} as never,
+            db as never,
             () => undefined,
             undefined,
             undefined,

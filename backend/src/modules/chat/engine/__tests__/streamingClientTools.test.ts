@@ -206,14 +206,12 @@ describe("runLLMStream client-tool dispatch", () => {
       expect.objectContaining({ name: "apply_word_edits" }),
     );
     // Both tool_use ids get a result, in the model's original order —
-    // the client result and the dispatcher's not-available fallback.
+    // the client result and the dispatcher's generic unavailable-tool result.
     expect(toolResults).toEqual([
       { tool_use_id: "call-a", content: '{"applied":1}' },
       {
         tool_use_id: "call-b",
-        content: JSON.stringify({
-          error: "Tool 'no_such_server_tool' is not available.",
-        }),
+        content: JSON.stringify({ ok: false, error: "Tool is unavailable." }),
       },
     ]);
     // The adapter's placement marker lands in the persisted assistant events,
@@ -271,7 +269,8 @@ describe("runLLMStream client-tool dispatch", () => {
       {
         tool_use_id: "call-a",
         content: JSON.stringify({
-          error: "Tool 'apply_word_edits' is not available.",
+          ok: false,
+          error: "Tool is unavailable.",
         }),
       },
     ]);
