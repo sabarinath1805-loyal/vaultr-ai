@@ -28,7 +28,7 @@ describe("configured tabular model authentication", () => {
         expect(missingModelApiKey("keyless-cloud", {})).toBeNull();
     });
 
-    it("rejects a configured endpoint when its declared key is unavailable", () => {
+    it("does not send a provider key to a different configured endpoint", () => {
         configure({
             id: "user-key-cloud",
             label: "User Key Cloud",
@@ -44,6 +44,18 @@ describe("configured tabular model authentication", () => {
         });
         expect(
             missingModelApiKey("user-key-cloud", { openai: "user-key" }),
-        ).toBeNull();
+        ).toMatchObject({ provider: "openai-compatible", model: "user-key-cloud" });
+    });
+
+    it("allows the key at the provider origin it is bound to", () => {
+        configure({
+            id: "openai-cloud",
+            provider: "openai-compatible",
+            location: "cloud",
+            baseUrl: "https://api.openai.com/v1",
+            apiKeyProvider: "openai",
+        });
+
+        expect(missingModelApiKey("openai-cloud", { openai: "user-key" })).toBeNull();
     });
 });

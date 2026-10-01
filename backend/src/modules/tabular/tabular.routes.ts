@@ -20,6 +20,7 @@ import { createServerSupabase } from "../../lib/supabase";
 import { recordAudit } from "../../lib/audit";
 import { sendInternalError } from "../../lib/httpError";
 import { sendServiceFailure } from "../../lib/serviceResult";
+import { admitAssistantStream } from "../../lib/streamCapacity";
 import {
     AssistantStreamError,
     assistantStreamErrorPayload,
@@ -380,6 +381,11 @@ tabularRouter.post("/:reviewId/generate", requireAuthenticatedBody("2mb"), authe
             detail: "expected_updated_at must be a valid timestamp",
         });
     }
+    const orgId =
+        typeof prepared.data.review.org_id === "string"
+            ? prepared.data.review.org_id
+            : null;
+    if (!(await admitAssistantStream(res, userId, orgId))) return;
     if (generationAbort.signal.aborted || res.destroyed) return;
 
     const claim = await claimTabularGeneration(db, {
@@ -502,6 +508,7 @@ tabularRouter.post("/:reviewId/generate", requireAuthenticatedBody("2mb"), authe
             apiKeys: api_keys,
             generationId,
             abortSignal: generationAbort.signal,
+            onTimeout: () => generationAbort.abort(),
             authorize: async (source) => {
                 await assertTabularReviewEditAccess(
                     db,
@@ -593,6 +600,8 @@ tabularRouter.get(
             userEmail: res.locals.userEmail as string | undefined,
         });
         if (!view.ok) return void sendTabularFailure(res, view);
+        const userId = res.locals.userId as string;
+        if (!(await admitAssistantStream(res, userId, view.data.organizationId))) return;
 
         await streamTabularRunView({
             res,
@@ -731,6 +740,8 @@ tabularRouter.post("/:reviewId/chat", requireAuthenticatedBody("2mb"), authentic
         requestedReasoning: parsedReasoning.value,
     });
     if (!preparation.ok) return void sendTabularFailure(res, preparation);
+    const orgId = preparation.data.organizationId;
+    if (!(await admitAssistantStream(res, userId, orgId))) return;
     const {
         apiMessages,
         apiKeys: api_keys,

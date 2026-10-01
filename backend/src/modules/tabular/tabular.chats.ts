@@ -437,6 +437,7 @@ export async function listTabularReviewChatMessages(
 // ---------------------------------------------------------------------------
 
 export type PreparedTabularChat = {
+    organizationId: string | null;
     /** The review's stored title, for the first-exchange title prompt. */
     reviewTitle: string | null;
     tabularStore: TabularCellStore;
@@ -698,6 +699,8 @@ export async function prepareTabularChat(
     return {
         ok: true,
         data: {
+            organizationId:
+                typeof review.org_id === "string" ? review.org_id : null,
             reviewTitle: (review.title as string | null) ?? null,
             tabularStore,
             chatId,

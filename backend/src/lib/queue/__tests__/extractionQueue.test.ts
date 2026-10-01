@@ -72,6 +72,9 @@ const DATA: ExtractionJobData = {
 beforeEach(() => {
     add.mockReset();
     getJob.mockReset();
+    enqueueDbJob.mockClear();
+    rpc.mockReset();
+    rpc.mockResolvedValue({ data: 0, error: null });
 });
 
 describe("extractionJobId", () => {
@@ -90,37 +93,31 @@ describe("extractionJobId", () => {
 });
 
 describe("enqueueExtraction (single-cell)", () => {
-    it("uses the column-suffixed jobId and carries columnIndex", () => {
-        enqueueExtraction({ ...DATA, columnIndex: 1 });
+    it("uses the column-suffixed durable dedupe key and carries columnIndex", async () => {
+        await enqueueExtraction({ ...DATA, columnIndex: 1 });
 
-        const [, data, opts] = add.mock.calls[0];
-        expect(data.columnIndex).toBe(1);
-        expect(opts.jobId).toBe("extract_rev-1_row-1_1");
+        const [, input] = enqueueDbJob.mock.calls[0];
+        expect(input.payload.columnIndex).toBe(1);
+        expect(input.dedupeKey).toBe("extract_rev-1_row-1_1");
+        expect(input.kind).toBe("extraction.extract");
     });
 });
 
 describe("enqueueExtraction", () => {
-    it("dedupes with a deterministic jobId of extract_<reviewId>_<rowId>", () => {
-        enqueueExtraction(DATA);
+    it("dedupes with a deterministic durable key of extract_<reviewId>_<rowId>", async () => {
+        await enqueueExtraction(DATA);
 
-        expect(add).toHaveBeenCalledTimes(1);
-        const [name, data, opts] = add.mock.calls[0];
-        expect(name).toBe("extract");
-        expect(data).toEqual(DATA);
-        expect(opts.jobId).toBe("extract_rev-1_row-1");
+        expect(add).not.toHaveBeenCalled();
+        expect(enqueueDbJob).toHaveBeenCalledTimes(1);
+        const [, input] = enqueueDbJob.mock.calls[0];
+        expect(input.kind).toBe("extraction.extract");
+        expect(input.payload).toEqual(DATA);
+        expect(input.dedupeKey).toBe("extract_rev-1_row-1");
     });
 
-    it("retries with backoff and removes terminal jobs so re-runs can re-enqueue", () => {
-        enqueueExtraction(DATA);
-
-        const opts = add.mock.calls[0][2];
-        expect(opts.attempts).toBe(3);
-        expect(opts.backoff).toEqual({ type: "exponential", delay: 2000 });
-        // removeOnComplete/Fail === true (not a keep-N count) is deliberate:
-        // durable state lives in tabular_cells, and immediate removal lets a
-        // later regenerate enqueue the same deterministic jobId again.
-        expect(opts.removeOnComplete).toBe(true);
-        expect(opts.removeOnFail).toBe(true);
+    it("retains the three-attempt retry budget in the durable queue", async () => {
+        await enqueueExtraction(DATA);
+        expect(enqueueDbJob.mock.calls[0][1].maxAttempts).toBe(3);
     });
 });
 
@@ -238,7 +235,8 @@ describe("postgres driver routing", () => {
                 ],
             });
             expect(out).toEqual({ removed: 3, canceled: 0 });
-            // BullMQ must never be touched in this mode.
+            // The Postgres driver uses the durable queue for both enqueue and
+            // cancellation; it never consults the legacy BullMQ transport.
             expect(getJob).not.toHaveBeenCalled();
         } finally {
             process.env.QUEUE_DRIVER = "redis";

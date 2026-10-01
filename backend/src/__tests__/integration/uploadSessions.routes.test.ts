@@ -116,8 +116,12 @@ describe("upload session routes", () => {
     });
     expect(mocks.rpc).toHaveBeenCalledOnce();
     expect(mocks.rpc).toHaveBeenCalledWith(
-      "create_upload_session",
-      expect.objectContaining({ target_hourly_session_limit: 50 }),
+      "create_upload_session_with_capacity",
+      expect.objectContaining({
+        target_hourly_session_limit: 50,
+        target_user_storage_quota_bytes: 0,
+        target_org_storage_quota_bytes: 0,
+      }),
     );
     expect(mocks.getSignedUploadUrl).toHaveBeenCalledTimes(2);
     // The declared byte count is signed into the URL; the browser supplies the

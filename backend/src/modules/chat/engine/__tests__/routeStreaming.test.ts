@@ -25,6 +25,12 @@ function fakeSseResponse() {
         on: vi.fn((event: string, cb: () => void) => {
             (listeners[event] ??= []).push(cb);
         }),
+        once: vi.fn((event: string, cb: () => void) => {
+            (listeners[event] ??= []).push(cb);
+        }),
+        emit: (event: string) => {
+            for (const listener of listeners[event] ?? []) listener();
+        },
     };
     return res;
 }
@@ -51,5 +57,60 @@ describe("openAssistantSse", () => {
         sse.finish();
 
         expect(res.end).toHaveBeenCalledTimes(1);
+    });
+
+    it("aborts and ends an idle stream with a generic timeout event", async () => {
+        vi.useFakeTimers();
+        try {
+            const res = fakeSseResponse();
+            const sse = openAssistantSse(res as unknown as Response, {
+                maxDurationMs: 100,
+                idleTimeoutMs: 20,
+            });
+            await vi.advanceTimersByTimeAsync(20);
+            expect(sse.signal.aborted).toBe(true);
+            expect(res.write).toHaveBeenCalledWith(
+                expect.stringContaining('"code":"stream_timeout"'),
+            );
+            expect(res.end).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("keeps the absolute deadline even while the stream has activity", async () => {
+        vi.useFakeTimers();
+        try {
+            const res = fakeSseResponse();
+            const sse = openAssistantSse(res as unknown as Response, {
+                maxDurationMs: 30,
+                idleTimeoutMs: 20,
+            });
+            await vi.advanceTimersByTimeAsync(15);
+            sse.write("data: progress\\n\\n");
+            await vi.advanceTimersByTimeAsync(15);
+            expect(sse.signal.aborted).toBe(true);
+            expect(res.end).toHaveBeenCalledTimes(1);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("aborts upstream work when the client closes and clears its timers", async () => {
+        vi.useFakeTimers();
+        try {
+            const res = fakeSseResponse();
+            const sse = openAssistantSse(res as unknown as Response, {
+                maxDurationMs: 100,
+                idleTimeoutMs: 50,
+            });
+            res.emit("close");
+            expect(sse.signal.aborted).toBe(true);
+            await vi.advanceTimersByTimeAsync(200);
+            expect(res.write).not.toHaveBeenCalled();
+            expect(res.end).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

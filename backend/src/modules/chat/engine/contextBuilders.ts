@@ -18,6 +18,7 @@ import { ACTIVE_WORD_DOCUMENT_LIVE_FILENAME } from "./wordPrompt";
 import { parseCitations, createCitation } from "./citations";
 import type { AssistantEvent } from "./streaming";
 import { catalogWorkflowId, ensureDefaultWorkflows } from "../../../lib/workflowCatalog";
+import { chatRequestLimits } from "../../../lib/runtimeConfig";
 
 // ---------------------------------------------------------------------------
 // Prompt-injection spotlighting helpers
@@ -308,7 +309,7 @@ export async function enrichWithPriorEvents(
 // ---------------------------------------------------------------------------
 
 /** Cap so an oversized document body can't blow the model's context window. */
-export const MAX_DOCUMENT_CONTEXT_CHARS = 200_000;
+export const MAX_DOCUMENT_CONTEXT_CHARS = chatRequestLimits().maxContextChars;
 
 /**
  * Parses the optional `document_context` field the Word add-in sends on

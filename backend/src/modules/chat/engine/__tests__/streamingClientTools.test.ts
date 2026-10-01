@@ -164,6 +164,35 @@ describe("runLLMStream client-tool dispatch", () => {
     expect(params.maxIterations).toBe(16);
   });
 
+  it("rejects oversized context before calling the provider", async () => {
+    await expect(
+      runLLMStream({
+        ...baseParams(),
+        apiMessages: [{ role: "user", content: "x".repeat(200_001) }],
+      }),
+    ).rejects.toThrow(/request context is too large/);
+    expect(streamChatWithTools).not.toHaveBeenCalled();
+  });
+
+  it("stops a model from dispatching more than the configured tool-call budget", async () => {
+    streamChatWithTools.mockImplementation(
+      async (params: { runTools?: RunToolsFn }) => {
+        await params.runTools?.(
+          Array.from({ length: 65 }, (_, index) => ({
+            id: `call-${index}`,
+            name: "unknown_tool",
+            input: {},
+          })),
+        );
+        return { fullText: "" };
+      },
+    );
+
+    await expect(runLLMStream(baseParams())).rejects.toThrow(
+      /tool-call limit/,
+    );
+  });
+
   it("routes owned calls to the adapter and answers every tool_use in order", async () => {
     const execute = vi.fn(async () => ({
       content: '{"applied":1}',

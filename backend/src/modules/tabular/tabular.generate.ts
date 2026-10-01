@@ -246,7 +246,11 @@ export function preparedGenerateFailure(
 export async function prepareTabularRunView(
     db: Db,
     args: { reviewId: string; userId: string; userEmail: string | undefined },
-): Promise<TabularResult<{ columns: Column[] } & TabularGenerateWork>> {
+): Promise<
+    TabularResult<
+        { columns: Column[]; organizationId: string | null } & TabularGenerateWork
+    >
+> {
     const prepared = await prepareTabularGenerate(db, args);
     if (!prepared.ok) return preparedGenerateFailure(prepared);
 
@@ -255,6 +259,13 @@ export async function prepareTabularRunView(
 
     return {
         ok: true,
-        data: { columns: prepared.data.columns, ...work.data },
+        data: {
+            columns: prepared.data.columns,
+            organizationId:
+                typeof prepared.data.review.org_id === "string"
+                    ? prepared.data.review.org_id
+                    : null,
+            ...work.data,
+        },
     };
 }

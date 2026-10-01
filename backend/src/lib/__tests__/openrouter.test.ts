@@ -1,4 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Provider tests must stay local even though production routes through the
+// guarded Undici transport. This mock preserves the per-test fetch fixtures.
+vi.mock("../outboundHttp", () => ({
+    guardedOutboundFetch: vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+        globalThis.fetch(input, init),
+    ),
+}));
+
 import { completeWithProvider, streamWithProvider } from "../llm/providers";
 
 function streamResponse(chunks: unknown[]): Response {

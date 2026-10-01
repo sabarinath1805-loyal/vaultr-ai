@@ -56,6 +56,7 @@ import {
 } from "./tools/documentOps";
 import { verifyCitations } from "./verifyCitations";
 import { buildMemoryTurn } from "../../../lib/memory/prompt";
+import { chatRequestLimits } from "../../../lib/runtimeConfig";
 
 export type { AssistantEvent } from "@mike/contracts";
 import type { AssistantEvent, AssistantErrorCode } from "@mike/contracts";
@@ -351,6 +352,8 @@ export async function runLLMStream(params: {
     sharedAudience: memorySharedAudience,
   });
   const systemPrompt = memory.systemPrompt;
+  const requestLimits = chatRequestLimits();
+  let totalToolCallCount = 0;
   const chatMessages: LlmMessage[] = rawMsgs
     .filter((m) => m.role !== "system")
     .map(
@@ -365,6 +368,10 @@ export async function runLLMStream(params: {
     .filter((m) => m.role === "user" || m.content.trim().length > 0);
   // Before every real turn: see MemoryTurn for why it goes there.
   if (memory.message) chatMessages.unshift(memory.message);
+  let modelContextChars = JSON.stringify({
+    systemPrompt,
+    messages: chatMessages,
+  }).length;
 
   const events: AssistantEvent[] = [];
   // One assistant turn produces at most one document_versions row per
@@ -571,6 +578,11 @@ export async function runLLMStream(params: {
 
   try {
     throwIfAborted(signal);
+    if (modelContextChars > requestLimits.maxContextChars) {
+      throw new UserFacingError(
+        "The request context is too large. Remove some content or documents and try again.",
+      );
+    }
     await assertCurrentContextAccess();
     // Single request-time choke point for every runLLMStream caller (chat,
     // project chat, Word chat, tabular): router-prefixed models must be in the
@@ -609,7 +621,10 @@ export async function runLLMStream(params: {
       // a literal, not an import: tests mock the "../llm" barrel, and reaching
       // past it into llm/aiSdk loads the real SDK module into suites that only
       // ever wanted the mock, which broke unrelated tests at random.
-      maxIterations: params.maxIterations ?? 16,
+      maxIterations: Math.min(
+        params.maxIterations ?? requestLimits.maxToolIterations,
+        requestLimits.maxToolIterations,
+      ),
       apiKeys,
       reasoning: params.reasoning ?? "high",
       abortSignal: signal,
@@ -665,6 +680,12 @@ export async function runLLMStream(params: {
       },
       runTools: async (calls) => {
         throwIfAborted(signal);
+        if (totalToolCallCount + calls.length > requestLimits.maxToolCallsPerTurn) {
+          throw new UserFacingError(
+            "This response reached the tool-call limit. Please try a narrower request.",
+          );
+        }
+        totalToolCallCount += calls.length;
         await assertCurrentContextAccess();
         flushPendingProviderDeltas();
         // Emit any text the model produced before this tool turn so the
@@ -836,6 +857,15 @@ export async function runLLMStream(params: {
             content?: unknown;
           };
           resultByCallId.set(row.tool_call_id, String(row.content ?? ""));
+        }
+        modelContextChars += [...resultByCallId.values()].reduce(
+          (total, content) => total + content.length,
+          0,
+        );
+        if (modelContextChars > requestLimits.maxContextChars) {
+          throw new UserFacingError(
+            "The response reached the context limit. Start a new request with fewer documents.",
+          );
         }
         // Answer every tool_use the model sent — client and server alike —
         // in the model's original call order.

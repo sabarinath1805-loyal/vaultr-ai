@@ -25,6 +25,7 @@ import {
     type DbJobHandlers,
 } from "./types";
 import { reportError } from "../observability/sentry";
+import { queueCapacityConfiguration } from "../runtimeConfig";
 
 /**
  * Poll cadence depends on the driver: with Redis configured, BullMQ delivers
@@ -149,6 +150,23 @@ export async function processClaimedJob(
     }
 
     try {
+        if (job.capacity_class && job.capacity_user_id) {
+            const { data: admitted, error } = await db.rpc(
+                "acquire_db_job_execution_capacity",
+                {
+                    target_job_id: job.id,
+                    target_attempts: job.attempts,
+                    target_claimed_at: job.claimed_at,
+                    target_max_concurrent: queueCapacityConfiguration()
+                        .maxConcurrentPerUser,
+                },
+            );
+            if (error) throw new Error("job execution capacity unavailable");
+            // A false response atomically returned this claim to pending and
+            // delayed it briefly. It did not spend an attempt or enter a
+            // handler, leaving slots available to other users.
+            if (admitted !== true) return;
+        }
         if (!handler) throw new Error(`unknown job kind: ${job.kind}`);
         const result = await handler(db, job);
         await fence(

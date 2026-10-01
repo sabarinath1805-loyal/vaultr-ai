@@ -1270,8 +1270,12 @@ userRouter.post(
             type: parsed.type,
             payload: parsed.payload,
         });
-        if (!result.ok)
-            return void res.status(500).json({ detail: result.detail });
+        if (!result.ok) {
+            if (result.status === 429) res.setHeader("Retry-After", "10");
+            return void res
+                .status(result.status)
+                .json({ detail: result.detail });
+        }
         res.status(202).json({ export_id: result.exportId });
     }),
 );

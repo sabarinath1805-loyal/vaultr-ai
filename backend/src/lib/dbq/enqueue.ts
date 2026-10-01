@@ -1,6 +1,7 @@
 import { deleteFile } from "../storage";
 import { enqueueAppJobDelivery } from "../queue/appJobsQueue";
 import { redisEnabled } from "./driver";
+import { queueCapacityConfiguration } from "../runtimeConfig";
 import type { Db } from "./types";
 
 export interface EnqueueDbJobInput {
@@ -22,6 +23,38 @@ export type EnqueueDbJobResult =
     | { id: string; deduped: false }
     | { id: string | null; deduped: true };
 
+/** A controlled rejection when a protected workload has reached its queue cap. */
+export class JobCapacityExceededError extends Error {
+    readonly code = "job_capacity_exceeded";
+
+    constructor() {
+        super("The work queue is full. Please try again shortly.");
+        this.name = "JobCapacityExceededError";
+    }
+}
+
+function isCapacityLimitedKind(kind: string): boolean {
+    return [
+        "conversion.convert",
+        "document.precompute_text",
+        "export.build",
+        "extraction.extract",
+    ].includes(kind);
+}
+
+async function deliverDbJob(id: string, runAt?: string): Promise<void> {
+    if (!redisEnabled()) return;
+    try {
+        const delayMs = runAt ? new Date(runAt).getTime() - Date.now() : 0;
+        await enqueueAppJobDelivery(id, { delayMs });
+    } catch (err) {
+        console.error(
+            "[dbq] redis delivery failed; poll backstop will run the job:",
+            err instanceof Error ? err.message : err,
+        );
+    }
+}
+
 /** Postgres unique_violation — the dedupe index rejected a second live job. */
 const UNIQUE_VIOLATION = "23505";
 
@@ -34,6 +67,41 @@ export async function enqueueDbJob(
     db: Db,
     input: EnqueueDbJobInput,
 ): Promise<EnqueueDbJobResult> {
+    if (isCapacityLimitedKind(input.kind)) {
+        const limits = queueCapacityConfiguration();
+        const { data, error } = await db.rpc("enqueue_capped_db_job", {
+            target_kind: input.kind,
+            target_payload: input.payload,
+            target_dedupe_key: input.dedupeKey ?? null,
+            target_max_attempts: input.maxAttempts ?? 5,
+            target_run_at: input.runAt ?? null,
+            target_global_limit: limits.maxGlobal,
+            target_user_limit: limits.maxPerUser,
+            target_org_limit: limits.maxPerOrg,
+        });
+        if (error) {
+            if (error.message?.includes("job_capacity_exceeded")) {
+                throw new JobCapacityExceededError();
+            }
+            throw new Error(`[dbq] enqueue ${input.kind} failed: ${error.message}`);
+        }
+        const row = Array.isArray(data) ? data[0] : data;
+        const id =
+            row && typeof row === "object" && "job_id" in row
+                ? (row as { job_id: string | null }).job_id
+                : null;
+        const deduped =
+            !!row && typeof row === "object" && "deduped" in row
+                ? Boolean((row as { deduped: boolean }).deduped)
+                : false;
+        if (!id) {
+            if (deduped) return { id: null, deduped: true };
+            throw new Error(`[dbq] enqueue ${input.kind} returned no job id`);
+        }
+        if (!deduped) await deliverDbJob(id, input.runAt);
+        return { id, deduped };
+    }
+
     const { data, error } = await db
         .from("db_jobs")
         .insert({
@@ -69,19 +137,7 @@ export async function enqueueDbJob(
     // configured, also hand its id to BullMQ so a worker picks it up in
     // milliseconds instead of at the next poll. Best-effort by design — a
     // failed delivery just means the poll backstop runs the job instead.
-    if (redisEnabled()) {
-        try {
-            const delayMs = input.runAt
-                ? new Date(input.runAt).getTime() - Date.now()
-                : 0;
-            await enqueueAppJobDelivery(data.id as string, { delayMs });
-        } catch (err) {
-            console.error(
-                "[dbq] redis delivery failed; poll backstop will run the job:",
-                err instanceof Error ? err.message : err,
-            );
-        }
-    }
+    await deliverDbJob(data.id as string, input.runAt);
     return { id: data.id as string, deduped: false };
 }
 

@@ -189,7 +189,7 @@ describe("upload session completion", () => {
       "https://upload.example/refreshed",
     );
     mocks.rpc.mockImplementation(async (name: string) =>
-      name === "queue_upload_session_file_processing"
+      name === "queue_upload_session_file_processing_with_capacity"
         ? { data: "job-1", error: null }
         : { data: "pending_upload", error: null },
     );
@@ -217,12 +217,17 @@ describe("upload session completion", () => {
     expect(mocks.copyFile).toHaveBeenCalledWith("staging-key", "sealed-key");
     expect(mocks.deleteFile).toHaveBeenCalledWith("staging-key");
     expect(mocks.rpc).toHaveBeenCalledWith(
-      "queue_upload_session_file_processing",
-      {
+      "queue_upload_session_file_processing_with_capacity",
+      expect.objectContaining({
         target_session_id: "22222222-2222-4222-8222-222222222222",
         target_user_id: "11111111-1111-4111-8111-111111111111",
         target_file_id: "33333333-3333-4333-8333-333333333333",
-      },
+        target_global_queue_limit: 500,
+        target_user_queue_limit: 100,
+        target_org_queue_limit: 200,
+        target_user_storage_quota_bytes: 0,
+        target_org_storage_quota_bytes: 0,
+      }),
     );
     expect(response.body.files[0]).toMatchObject({
       status: "uploaded",
@@ -253,7 +258,7 @@ describe("upload session completion", () => {
     expect(mocks.headFile).not.toHaveBeenCalled();
     expect(mocks.copyFile).not.toHaveBeenCalled();
     expect(mocks.rpc).not.toHaveBeenCalledWith(
-      "queue_upload_session_file_processing",
+      "queue_upload_session_file_processing_with_capacity",
       expect.anything(),
     );
     expect(mocks.files[0]).toMatchObject({ status: "pending_upload" });
@@ -324,12 +329,17 @@ describe("upload session completion", () => {
       ]),
     );
     expect(mocks.rpc).toHaveBeenCalledWith(
-      "queue_upload_session_file_processing",
-      {
+      "queue_upload_session_file_processing_with_capacity",
+      expect.objectContaining({
         target_session_id: "22222222-2222-4222-8222-222222222222",
         target_user_id: "11111111-1111-4111-8111-111111111111",
         target_file_id: "33333333-3333-4333-8333-333333333333",
-      },
+        target_global_queue_limit: 500,
+        target_user_queue_limit: 100,
+        target_org_queue_limit: 200,
+        target_user_storage_quota_bytes: 0,
+        target_org_storage_quota_bytes: 0,
+      }),
     );
   });
 
@@ -446,7 +456,7 @@ describe("upload session completion", () => {
     expect(response.body.code).toBe("upload_incomplete");
     expect(mocks.files[0]).toMatchObject({ status: "pending_upload" });
     expect(mocks.rpc).not.toHaveBeenCalledWith(
-      "queue_upload_session_file_processing",
+      "queue_upload_session_file_processing_with_capacity",
       expect.anything(),
     );
   });
@@ -480,7 +490,7 @@ describe("upload session completion", () => {
       if (name === "extend_upload_session_expiry") {
         return { data: null, error: { message: "rpc unavailable" } };
       }
-      return name === "queue_upload_session_file_processing"
+      return name === "queue_upload_session_file_processing_with_capacity"
         ? { data: "job-1", error: null }
         : { data: "pending_upload", error: null };
     });
@@ -528,7 +538,7 @@ describe("upload session completion", () => {
     });
     expect(mocks.deleteFile).toHaveBeenCalledWith("staging-key");
     expect(mocks.rpc).not.toHaveBeenCalledWith(
-      "queue_upload_session_file_processing",
+      "queue_upload_session_file_processing_with_capacity",
       expect.anything(),
     );
   });

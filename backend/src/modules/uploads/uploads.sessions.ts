@@ -29,6 +29,10 @@ import {
 } from "../../lib/storage";
 import type { Db } from "../../lib/supabase";
 import {
+  queueCapacityConfiguration,
+  uploadStorageQuotaConfiguration,
+} from "../../lib/runtimeConfig";
+import {
   uploadSessionExpiresAt,
   UPLOAD_URL_TTL_SECONDS,
   UPLOAD_VERIFICATION_LEASE_SECONDS,
@@ -236,10 +240,17 @@ async function queueFileProcessing(
   userId: string,
   fileId: string,
 ): Promise<string> {
-  const { data, error } = await db.rpc("queue_upload_session_file_processing", {
+  const queueLimits = queueCapacityConfiguration();
+  const storageLimits = uploadStorageQuotaConfiguration();
+  const { data, error } = await db.rpc("queue_upload_session_file_processing_with_capacity", {
     target_session_id: sessionId,
     target_user_id: userId,
     target_file_id: fileId,
+    target_global_queue_limit: queueLimits.maxGlobal,
+    target_user_queue_limit: queueLimits.maxPerUser,
+    target_org_queue_limit: queueLimits.maxPerOrg,
+    target_user_storage_quota_bytes: storageLimits.maxBytesPerUser,
+    target_org_storage_quota_bytes: storageLimits.maxBytesPerOrg,
   });
   if (error) throw error;
   if (typeof data !== "string" || !data) {
@@ -369,7 +380,8 @@ export async function createUploadSession(
 ): Promise<UploadResult<Record<string, unknown>>> {
   const { sessionId, userId, manifest } = args;
   const expiresAt = uploadSessionExpiresAt();
-  const { error } = await db.rpc("create_upload_session", {
+  const storageLimits = uploadStorageQuotaConfiguration();
+  const { error } = await db.rpc("create_upload_session_with_capacity", {
     target_session_id: sessionId,
     target_user_id: userId,
     target_purpose: manifest.purpose,
@@ -377,12 +389,20 @@ export async function createUploadSession(
     target_expires_at: expiresAt,
     target_files: manifest.files,
     target_hourly_session_limit: args.hourlySessionLimit,
+    target_user_storage_quota_bytes: storageLimits.maxBytesPerUser,
+    target_org_storage_quota_bytes: storageLimits.maxBytesPerOrg,
   });
   if (error) {
     if (error.message?.includes("upload_session_rate_limit_exceeded")) {
       return failure(429, {
         code: "upload_session_rate_limit_exceeded",
         detail: "Too many upload sessions. Please try again later.",
+      });
+    }
+    if (error.message?.includes("upload_storage_quota_exceeded")) {
+      return failure(413, {
+        code: "upload_storage_quota_exceeded",
+        detail: "The upload exceeds the available storage quota.",
       });
     }
     if (error.message?.includes("upload_target_busy")) {
@@ -590,6 +610,19 @@ export async function completeUploadSessionFile(
     // retrying, so it answers 503 rather than the generic 500.
     if (error instanceof StorageOperationError) {
       return internalFailure(error, 503);
+    }
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("upload_storage_quota_exceeded")) {
+      return failure(413, {
+        code: "upload_storage_quota_exceeded",
+        detail: "The upload exceeds the available storage quota.",
+      });
+    }
+    if (message.includes("upload_processing_queue_full")) {
+      return failure(429, {
+        code: "upload_processing_queue_full",
+        detail: "Upload processing is busy. Please try again shortly.",
+      });
     }
     throw error;
   }

@@ -16,6 +16,10 @@ export interface DbJob {
     dedupe_key: string | null;
     result: Record<string, unknown> | null;
     created_at: string;
+    /** WS6 queue accounting metadata; null for uncapped maintenance jobs. */
+    capacity_class?: "document" | "export" | "tabular" | null;
+    capacity_user_id?: string | null;
+    capacity_org_id?: string | null;
 }
 
 /** A domain handler can defer a claimed job without consuming retry budget. */

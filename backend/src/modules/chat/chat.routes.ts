@@ -13,6 +13,7 @@ import { requireAuth } from "../../middleware/auth";
 import { requireAuthenticatedBody } from "../../middleware/authBody";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { authenticatedRateLimit } from "../../lib/rateLimit";
+import { admitAssistantStream, organizationIdForProject } from "../../lib/streamCapacity";
 import { createServerSupabase } from "../../lib/supabase";
 import { enqueueChatTurnAudit } from "../../lib/audit";
 import {
@@ -515,6 +516,12 @@ chatRouter.post("/", requireAuthenticatedBody("2mb"), authenticatedRateLimit("ch
             detail: prep.detail,
         });
     }
+
+    const streamOrgId = await organizationIdForProject(
+        db,
+        prep.prepared.resolvedProjectId,
+    );
+    if (!(await admitAssistantStream(res, userId, streamOrgId))) return;
 
     const {
         chatId,

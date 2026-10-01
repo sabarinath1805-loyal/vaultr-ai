@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { requireAuth } from "../../middleware/auth";
 import { requireAuthenticatedBody } from "../../middleware/authBody";
 import { authenticatedRateLimit } from "../../lib/rateLimit";
+import { admitAssistantStream, organizationIdForProject } from "../../lib/streamCapacity";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import { enqueueChatTurnAudit } from "../../lib/audit";
@@ -130,6 +131,9 @@ projectChatRouter.post("/", requireAuthenticatedBody("2mb"), authenticatedRateLi
             detail: prep.detail,
         });
     }
+
+    const streamOrgId = await organizationIdForProject(db, projectId);
+    if (!(await admitAssistantStream(res, userId, streamOrgId))) return;
 
     const {
         chatId,

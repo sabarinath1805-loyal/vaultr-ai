@@ -33,6 +33,7 @@ import type { Response } from "express";
 import { REDIS_URL } from "../../lib/queue/connection";
 import { redisEnabled } from "../../lib/dbq/driver";
 import { startSseHeartbeat } from "../../lib/sseHeartbeat";
+import { streamCapacityConfiguration } from "../../lib/runtimeConfig";
 import { enqueueExtraction } from "../../lib/queue/extractionQueue";
 import {
     runProgressChannel,
@@ -52,9 +53,6 @@ import {
 
 /** How often the DB-poll backstop reconciles cell state (ms). */
 const RECONCILE_INTERVAL_MS = 3_000;
-/** Hard ceiling on a single stream so a vanished job can't hold it open forever. */
-const STREAM_MAX_MS = 15 * 60 * 1000;
-
 const cellKey = (rowId: string, columnIndex: number) =>
     `${rowId}:${columnIndex}`;
 
@@ -175,10 +173,14 @@ async function tailTabularRun(args: {
     res.flushHeaders();
 
     const stopHeartbeat = startSseHeartbeat(res);
-    const write = (payload: unknown) => {
+    const limits = streamCapacityConfiguration();
+    let idle: ReturnType<typeof setTimeout> | null = null;
+    const write = (payload: unknown, activity = true) => {
         try {
-            if (!res.writableEnded)
+            if (!res.writableEnded) {
                 res.write(`data: ${JSON.stringify(payload)}\n\n`);
+                if (activity) resetIdleTimer();
+            }
         } catch {
             // Client gone; the "close" handler will tear the stream down.
         }
@@ -188,11 +190,18 @@ async function tailTabularRun(args: {
     let poll: ReturnType<typeof setInterval> | null = null;
     let cap: ReturnType<typeof setTimeout> | null = null;
     let finished = false;
+    const resetIdleTimer = () => {
+        if (finished) return;
+        if (idle) clearTimeout(idle);
+        idle = setTimeout(expire, limits.idleTimeoutMs);
+        idle.unref?.();
+    };
 
     const cleanup = () => {
         stopHeartbeat();
         if (poll) clearInterval(poll);
         if (cap) clearTimeout(cap);
+        if (idle) clearTimeout(idle);
         if (sub) void sub.quit().catch(() => {});
         sub = null;
     };
@@ -216,6 +225,18 @@ async function tailTabularRun(args: {
         finished = true;
         cleanup();
     };
+    const expire = () => {
+        if (finished) return;
+        write(
+            {
+                type: "error",
+                code: "stream_timeout",
+                message: "The response timed out. Please try again.",
+            },
+            false,
+        );
+        finish();
+    };
 
     // Terminal update for a pending cell: forward it and drop it from the set.
     const resolve = (key: string, update: CellUpdate) => {
@@ -237,6 +258,9 @@ async function tailTabularRun(args: {
     };
 
     res.on("close", abandon);
+    resetIdleTimer();
+    cap = setTimeout(expire, limits.maxDurationMs);
+    cap.unref?.();
 
     // Nothing to do — every targeted cell is already done.
     if (pending.size === 0) return void finish();
@@ -265,6 +289,7 @@ async function tailTabularRun(args: {
     }
 
     if (afterSubscribe) await afterSubscribe();
+    if (finished) return;
 
     // Backstop: reconcile against the DB in case a pub/sub frame was missed (or,
     // for a reconnecting view, to replay progress that happened while away).
@@ -310,8 +335,6 @@ async function tailTabularRun(args: {
     }, RECONCILE_INTERVAL_MS);
     if (typeof poll.unref === "function") poll.unref();
 
-    cap = setTimeout(finish, STREAM_MAX_MS);
-    if (typeof cap.unref === "function") cap.unref();
 }
 
 /**
@@ -505,6 +528,21 @@ export async function streamTabularGenerateAsync(args: {
                         reviewId,
                         rowId,
                     });
+                    // A rejected queue reservation means no worker owns this
+                    // row. Clear this generation's stamps so the cells cannot
+                    // remain stuck in "generating" while the other users'
+                    // bounded queue continues to drain.
+                    for (const column of columns) {
+                        const key = cellKey(rowId, column.index);
+                        if (!pending.has(key)) continue;
+                        await finalizeCell(db, {
+                            reviewId,
+                            rowId,
+                            columnIndex: column.index,
+                            status: "error",
+                            generationId,
+                        });
+                    }
                 }
             }
         },
@@ -576,6 +614,7 @@ export async function streamTabularGenerateSync(args: {
     apiKeys: UserApiKeys;
     generationId: string;
     abortSignal: AbortSignal;
+    onTimeout?: () => void;
     authorize?: (source?: SourceDocument | string) => Promise<void>;
     onError?: (error: unknown) => void;
 }): Promise<boolean> {
@@ -590,13 +629,32 @@ export async function streamTabularGenerateSync(args: {
         apiKeys,
         generationId,
         abortSignal,
+        onTimeout,
         authorize,
         onError,
     } = args;
 
+    const limits = streamCapacityConfiguration();
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    let totalTimer: ReturnType<typeof setTimeout> | null = null;
+    let timedOut = false;
+    const clearTimers = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        if (totalTimer) clearTimeout(totalTimer);
+        idleTimer = null;
+        totalTimer = null;
+    };
+    const resetIdleTimer = () => {
+        if (timedOut || abortSignal.aborted) return;
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(timeoutStream, limits.idleTimeoutMs);
+        idleTimer.unref?.();
+    };
     const write = (line: string) => {
-        if (res.destroyed || res.writableEnded) return false;
-        return res.write(line);
+        if (timedOut || abortSignal.aborted || res.destroyed || res.writableEnded) return false;
+        const result = res.write(line);
+        if (!timedOut) resetIdleTimer();
+        return result;
     };
 
     res.setHeader("Content-Type", "text/event-stream");
@@ -604,6 +662,31 @@ export async function streamTabularGenerateSync(args: {
     res.setHeader("Connection", "keep-alive");
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
+
+    const timeoutStream = () => {
+        if (timedOut || abortSignal.aborted || res.destroyed || res.writableEnded) return;
+        timedOut = true;
+        clearTimers();
+        try {
+            res.write(
+                `data: ${JSON.stringify({
+                    type: "error",
+                    code: "stream_timeout",
+                    message: "The response timed out. Please try again.",
+                })}\n\ndata: [DONE]\n\n`,
+            );
+        } catch {
+            // The response closed at the same time as the deadline.
+        }
+        try {
+            onTimeout?.();
+        } finally {
+            if (!res.destroyed && !res.writableEnded) res.end();
+        }
+    };
+    resetIdleTimer();
+    totalTimer = setTimeout(timeoutStream, limits.maxDurationMs);
+    totalTimer.unref?.();
 
     let nextRowIndex = 0;
     const cellFrame = (
@@ -672,12 +755,15 @@ export async function streamTabularGenerateSync(args: {
             await processRow(rows[rowIndex]);
         }
     };
-    await Promise.all(
-        Array.from(
-            { length: Math.min(TABULAR_GENERATION_CONCURRENCY, rows.length) },
-            () => runWorker(),
-        ),
-    );
-
-    return !abortSignal.aborted;
+    try {
+        await Promise.all(
+            Array.from(
+                { length: Math.min(TABULAR_GENERATION_CONCURRENCY, rows.length) },
+                () => runWorker(),
+            ),
+        );
+        return !abortSignal.aborted;
+    } finally {
+        clearTimers();
+    }
 }

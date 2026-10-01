@@ -18,6 +18,7 @@ import {
 } from "../../lib/storage";
 import { docxToPdf } from "../../lib/convert";
 import { enqueueConversion } from "../../lib/queue/conversionQueue";
+import { JobCapacityExceededError } from "../../lib/dbq/enqueue";
 import { contentSha256, loadActiveVersion } from "../../lib/documentVersions";
 import { creatorScopedAllowed } from "../../lib/access";
 import { can, DOCUMENT_EDIT_FORBIDDEN } from "../../lib/permissions";
@@ -264,15 +265,25 @@ export async function createVersionFromDocument(
     }
 
     if (deferConversion) {
-        await enqueueConversion({
-            documentId,
-            versionId: versionRow.id as string,
-            userId,
-            storagePath: key,
-            fileType: suffix,
-            pdfKey: `converted-pdfs/${userId}/${documentId}/${versionSlug}.pdf`,
-            finalizeDocumentStatus: false,
-        });
+        try {
+            await enqueueConversion({
+                documentId,
+                versionId: versionRow.id as string,
+                userId,
+                storagePath: key,
+                fileType: suffix,
+                pdfKey: `converted-pdfs/${userId}/${documentId}/${versionSlug}.pdf`,
+                finalizeDocumentStatus: false,
+            });
+        } catch (error) {
+            if (!(error instanceof JobCapacityExceededError)) throw error;
+            // The copied bytes and version are already durable and usable;
+            // PDF rendition is secondary, so a full work queue must not turn
+            // a successful version operation into a misleading request error.
+            console.warn("[versions/copy] rendition deferred because queue is full", {
+                documentId,
+            });
+        }
     }
 
     if (willDeleteSource) {

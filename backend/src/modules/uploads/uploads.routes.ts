@@ -68,6 +68,7 @@ function sendUploadFailure(res: Response, failure: UploadFailure): void {
     sendInternalError(res, failure.error, failure.status);
     return;
   }
+  if (failure.status === 429) res.setHeader("Retry-After", "10");
   res.status(failure.status).json(failure.body);
 }
 

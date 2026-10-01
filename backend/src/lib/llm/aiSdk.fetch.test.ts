@@ -81,6 +81,51 @@ describe("aiSdkFetch", () => {
     await expect(response.text()).resolves.toBe(`${body}\n\n`);
   });
 
+  it("keeps only a safe invalid-key classification from provider errors", async () => {
+    vi.mocked(guardedOutboundFetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "API key not valid. Do not echo this provider detail.",
+            supplied: "synthetic-secret-value",
+          },
+        }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    const response = await aiSdkFetch("https://provider.example.test/v1/chat");
+    const body = await response.text();
+
+    expect(response.status).toBe(400);
+    expect(body).toContain("API key not valid.");
+    expect(body).not.toContain("Do not echo this provider detail");
+    expect(body).not.toContain("synthetic-secret-value");
+  });
+
+  it("replaces unrelated provider error bodies with a generic message", async () => {
+    vi.mocked(guardedOutboundFetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({ message: "internal failure synthetic-secret-value" }),
+        {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    const response = await aiSdkFetch("https://provider.example.test/v1/chat");
+    const body = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(body).toContain("Provider request failed.");
+    expect(body).not.toContain("internal failure");
+    expect(body).not.toContain("synthetic-secret-value");
+  });
+
   it("lets the OpenAI-compatible SDK recover a clean malformed generate_docx call", async () => {
     const { createOpenAICompatible } =
       await import("@ai-sdk/openai-compatible");

@@ -8,6 +8,10 @@ import {
   uploadJobWallClockMs,
   uploadProcessingConfiguration,
   uploadSessionRateLimitConfiguration,
+  chatRequestLimits,
+  streamCapacityConfiguration,
+  queueCapacityConfiguration,
+  uploadStorageQuotaConfiguration,
   spreadsheetParsingConfiguration,
   validateRuntimeConfiguration,
 } from "../runtimeConfig";
@@ -245,6 +249,88 @@ describe("spreadsheet parser deadline", () => {
         SPREADSHEET_PARSE_TIMEOUT_MS: "999999",
       }).timeoutMs,
     ).toBe(10_000);
+  });
+});
+
+describe("WS6 capacity configuration", () => {
+  it("provides bounded request, stream, queue, and storage defaults", () => {
+    expect(chatRequestLimits({})).toEqual({
+      maxMessageChars: 50_000,
+      maxAttachmentsPerTurn: 20,
+      maxContextChars: 200_000,
+      maxToolIterations: 16,
+      maxToolCallsPerTurn: 64,
+    });
+    expect(streamCapacityConfiguration({})).toEqual({
+      maxPerUser: 2,
+      maxPerOrg: 20,
+      maxDurationMs: 900_000,
+      idleTimeoutMs: 120_000,
+      memoryMaxKeys: 10_000,
+    });
+    expect(queueCapacityConfiguration({})).toEqual({
+      maxGlobal: 500,
+      maxPerUser: 100,
+      maxPerOrg: 200,
+      maxConcurrentPerUser: 2,
+    });
+    expect(uploadStorageQuotaConfiguration({})).toEqual({
+      maxBytesPerUser: 0,
+      maxBytesPerOrg: 0,
+    });
+  });
+
+  it("accepts valid overrides and clamps extreme values", () => {
+    expect(
+      chatRequestLimits({
+        CHAT_MAX_MESSAGE_CHARS: "70000",
+        CHAT_MAX_ATTACHMENTS_PER_TURN: "12",
+        CHAT_MAX_CONTEXT_CHARS: "300000",
+        CHAT_MAX_TOOL_ITERATIONS: "20",
+        CHAT_MAX_TOOL_CALLS_PER_TURN: "80",
+      }),
+    ).toEqual({
+      maxMessageChars: 70_000,
+      maxAttachmentsPerTurn: 12,
+      maxContextChars: 300_000,
+      maxToolIterations: 20,
+      maxToolCallsPerTurn: 80,
+    });
+    expect(
+      streamCapacityConfiguration({
+        LLM_MAX_CONCURRENT_STREAMS_PER_USER: "5000",
+        LLM_MAX_CONCURRENT_STREAMS_PER_ORG: "3",
+        LLM_STREAM_MAX_DURATION_MS: "1",
+        LLM_STREAM_IDLE_TIMEOUT_MS: "99999999",
+      }),
+    ).toEqual({
+      maxPerUser: 100,
+      maxPerOrg: 3,
+      maxDurationMs: 30_000,
+      idleTimeoutMs: 600_000,
+      memoryMaxKeys: 10_000,
+    });
+    expect(
+      queueCapacityConfiguration({
+        JOB_QUEUE_MAX_GLOBAL: "250",
+        JOB_QUEUE_MAX_PER_USER: "15",
+        JOB_QUEUE_MAX_PER_ORG: "400",
+      }),
+    ).toEqual({
+      maxGlobal: 250,
+      maxPerUser: 15,
+      maxPerOrg: 400,
+      maxConcurrentPerUser: 2,
+    });
+    expect(
+      uploadStorageQuotaConfiguration({
+        UPLOAD_STORAGE_QUOTA_BYTES_PER_USER: "1000000",
+        UPLOAD_STORAGE_QUOTA_BYTES_PER_ORG: "5000000",
+      }),
+    ).toEqual({
+      maxBytesPerUser: 1_000_000,
+      maxBytesPerOrg: 5_000_000,
+    });
   });
 });
 

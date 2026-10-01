@@ -14,6 +14,7 @@ import { Router } from "express";
 import { requireAuth } from "../../middleware/auth";
 import { requireAuthenticatedBody } from "../../middleware/authBody";
 import { authenticatedRateLimit } from "../../lib/rateLimit";
+import { admitAssistantStream } from "../../lib/streamCapacity";
 import { asyncRoute, routerErrorHandler } from "../../middleware/asyncRoute";
 import { createServerSupabase } from "../../lib/supabase";
 import {
@@ -580,6 +581,8 @@ wordChatRouter.post("/", requireAuthenticatedBody("2mb"), authenticatedRateLimit
       detail: prep.detail,
     });
   }
+
+  if (!(await admitAssistantStream(res, userId))) return;
 
   const {
     chatId,

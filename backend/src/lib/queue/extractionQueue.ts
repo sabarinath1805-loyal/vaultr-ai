@@ -1,6 +1,6 @@
 import { Queue } from "bullmq";
 import type IORedis from "ioredis";
-import { getRedisProducerConnection, withRedisTimeout } from "./connection";
+import { getRedisProducerConnection } from "./connection";
 import { redisEnabled } from "../dbq/driver";
 import { enqueueDbJob } from "../dbq/enqueue";
 import { createServerSupabase } from "../supabase";
@@ -101,29 +101,15 @@ export function extractionJobId(
  * lives in the `tabular_cells` table, not in the job record.
  */
 export async function enqueueExtraction(data: ExtractionJobData) {
-    // Postgres driver: same job on the DB queue — same dedupe identity and
-    // retry budget, same handler body (runExtractionJob). Live progress
-    // frames are skipped in this mode; the SSE views' DB-poll backstops
-    // resolve every cell (they already had to, for missed pub/sub frames).
-    if (!redisEnabled()) {
-        return enqueueDbJob(createServerSupabase(), {
-            kind: "extraction.extract",
-            payload: data as unknown as Record<string, unknown>,
-            dedupeKey: extractionJobId(data.reviewId, data.rowId, data.columnIndex),
-            maxAttempts: 3,
-        });
-    }
-    // Deadline-bounded — see enqueueAppJobDelivery: a Redis outage must not
-    // hang the /generate request that is enqueuing this row.
-    return withRedisTimeout("extraction enqueue", () =>
-        getExtractionQueue().add("extract", data, {
-            jobId: extractionJobId(data.reviewId, data.rowId, data.columnIndex),
-            attempts: 3,
-            backoff: { type: "exponential", delay: 2000 },
-            removeOnComplete: true,
-            removeOnFail: true,
-        }),
-    );
+    // New extraction work always enters the durable queue, which lets
+    // Postgres enforce the same bounded capacity with or without Redis. Redis
+    // remains only the fast delivery path for the resulting db_jobs row.
+    return enqueueDbJob(createServerSupabase(), {
+        kind: "extraction.extract",
+        payload: data as unknown as Record<string, unknown>,
+        dedupeKey: extractionJobId(data.reviewId, data.rowId, data.columnIndex),
+        maxAttempts: 3,
+    });
 }
 
 /**
@@ -157,24 +143,27 @@ export async function removeQueuedExtractionJobs(
     rowIds: string[],
     columnIndexes: number[],
 ): Promise<{ removed: number; canceled: number }> {
-    // Postgres driver: one RPC deletes the pending rows and stamps a
-    // persisted `canceled` marker into running ones — the exact analogue of
-    // the remove + updateData split below (the RPC reports one merged count).
-    if (!redisEnabled()) {
-        const keys = rowIds.flatMap((rowId) => [
-            extractionJobId(reviewId, rowId),
-            ...columnIndexes.map((c) => extractionJobId(reviewId, rowId, c)),
-        ]);
-        const { data, error } = await createServerSupabase().rpc(
-            "cancel_db_jobs",
-            { p_dedupe_keys: keys },
-        );
-        if (error) throw new Error(error.message);
-        return { removed: (data as number) ?? 0, canceled: 0 };
+    const keys = rowIds.flatMap((rowId) => [
+        extractionJobId(reviewId, rowId),
+        ...columnIndexes.map((c) => extractionJobId(reviewId, rowId, c)),
+    ]);
+    const { data, error } = await createServerSupabase().rpc("cancel_db_jobs", {
+        p_dedupe_keys: keys,
+    });
+    if (error && !redisEnabled()) throw new Error(error.message);
+    if (error) {
+        console.error("[tabular] durable job cancellation failed", {
+            reason: "database_error",
+        });
     }
-    const queue = getExtractionQueue();
-    let removed = 0;
+    let removed = (data as number) ?? 0;
     let canceled = 0;
+    if (!redisEnabled()) return { removed, canceled };
+
+    // During rollout, old BullMQ jobs may still exist. New jobs are durable
+    // db_jobs rows, so clear-cells cancels both transports until the old queue
+    // has drained.
+    const queue = getExtractionQueue();
     for (const rowId of rowIds) {
         const jobIds = [
             extractionJobId(reviewId, rowId),

@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// Provider tests use local fetch stubs below; do not open network connections.
+vi.mock("../outboundHttp", () => ({
+    guardedOutboundFetch: vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+        globalThis.fetch(input, init),
+    ),
+}));
+
 import { completeWithProvider } from "../llm/providers";
 import { resetModelRegistryCache } from "../llm/registry";
 import type { ConfiguredModel } from "../llm/types";

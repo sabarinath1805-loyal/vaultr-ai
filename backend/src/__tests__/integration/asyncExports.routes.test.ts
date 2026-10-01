@@ -58,7 +58,11 @@ function makeQuery(table: string) {
 vi.mock("../../lib/supabase", () => ({
     createServerSupabase: vi.fn(() => ({
         from: vi.fn((table: string) => makeQuery(table)),
-        rpc: vi.fn(async () => ({ data: null, error: null })),
+        rpc: vi.fn(async (name: string) =>
+            name === "enqueue_capped_db_job"
+                ? { data: { job_id: "job-1", deduped: false }, error: null }
+                : { data: null, error: null },
+        ),
         auth: {
             getUser: async () => ({ data: { user: { id: "u1" } }, error: null }),
             admin: { deleteUser: vi.fn(async () => ({ error: null })) },

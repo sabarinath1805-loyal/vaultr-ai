@@ -5,7 +5,10 @@
 // contract.
 
 import { AUDIT_EXPORT_LIMIT, parseQuery } from "../../lib/auditExport";
-import { enqueueDbJob } from "../../lib/dbq/enqueue";
+import {
+    enqueueDbJob,
+    JobCapacityExceededError,
+} from "../../lib/dbq/enqueue";
 import {
     EXPORT_TYPES,
     MAX_ZIP_EXPORT_DOCUMENTS,
@@ -140,7 +143,7 @@ export function validateExportRequest(input: {
 
 export type StartUserExportResult =
     | { ok: true; exportId: string }
-    | { ok: false; detail: string };
+    | { ok: false; status: number; detail: string };
 
 /** Enqueues the durable build job for an already-validated export request. */
 export async function startUserExport(
@@ -167,7 +170,12 @@ export async function startUserExport(
             dedupeKey,
             maxAttempts: 3,
         });
-        if (!out.id) return { ok: false, detail: "Failed to schedule export" };
+        if (!out.id)
+            return {
+                ok: false,
+                status: 503,
+                detail: "Exports are temporarily unavailable. Please try again later.",
+            };
         return { ok: true, exportId: out.id };
     } catch (err) {
         const detail = errorMessage(err);
@@ -175,7 +183,18 @@ export async function startUserExport(
             userId,
             error: detail,
         });
-        return { ok: false, detail };
+        if (err instanceof JobCapacityExceededError) {
+            return {
+                ok: false,
+                status: 429,
+                detail: "The export queue is busy. Please try again shortly.",
+            };
+        }
+        return {
+            ok: false,
+            status: 503,
+            detail: "Exports are temporarily unavailable. Please try again later.",
+        };
     }
 }
 

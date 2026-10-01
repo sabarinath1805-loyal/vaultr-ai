@@ -25,6 +25,7 @@ vi.mock("../../dbq/enqueue", async (importOriginal) => {
             enqueueDbJob(db, input),
     };
 });
+vi.mock("../../supabase", () => ({ createServerSupabase: () => ({}) }));
 const rpc = vi.fn<
     (
         fn: string,
@@ -70,6 +71,7 @@ const DATA: ConversionJobData = {
 
 beforeEach(() => {
     add.mockReset();
+    enqueueDbJob.mockClear();
 });
 
 describe("conversionJobId", () => {
@@ -98,16 +100,18 @@ describe("conversionJobId", () => {
 });
 
 describe("enqueueConversion", () => {
-    it("dedupes on the (version, storage key) identity", () => {
-        enqueueConversion(DATA);
+    it("uses the durable queue with the (version, storage key) identity", async () => {
+        await enqueueConversion(DATA);
 
-        expect(add).toHaveBeenCalledTimes(1);
-        const [name, data, opts] = add.mock.calls[0];
-        expect(name).toBe("convert");
-        expect(data).toEqual(DATA);
-        expect(opts.jobId).toBe(
+        expect(add).not.toHaveBeenCalled();
+        expect(enqueueDbJob).toHaveBeenCalledTimes(1);
+        const [, input] = enqueueDbJob.mock.calls[0];
+        expect(input.kind).toBe("conversion.convert");
+        expect(input.payload).toEqual(DATA);
+        expect(input.dedupeKey).toBe(
             conversionJobId(DATA.versionId, DATA.storagePath),
         );
+        expect(input.maxAttempts).toBe(3);
     });
 
     it("does not dedupe a second replace of the same version", async () => {
@@ -117,31 +121,26 @@ describe("enqueueConversion", () => {
             storagePath: "uploads/user-1/doc-1-replaced.docx",
         });
 
-        expect(add).toHaveBeenCalledTimes(2);
-        expect(add.mock.calls[0][2].jobId).not.toBe(add.mock.calls[1][2].jobId);
+        expect(enqueueDbJob).toHaveBeenCalledTimes(2);
+        expect(enqueueDbJob.mock.calls[0][1].dedupeKey).not.toBe(
+            enqueueDbJob.mock.calls[1][1].dedupeKey,
+        );
     });
 
-    it("retries with backoff and removes terminal jobs so re-conversions can re-enqueue", () => {
-        enqueueConversion(DATA);
-
-        const opts = add.mock.calls[0][2];
-        expect(opts.attempts).toBe(3);
-        expect(opts.backoff).toEqual({ type: "exponential", delay: 2000 });
-        // Immediate removal (not keep-N) is deliberate: replace-file reuses
-        // the versionId, and a lingering completed job record would silently
-        // dedupe the re-conversion into the old job.
-        expect(opts.removeOnComplete).toBe(true);
-        expect(opts.removeOnFail).toBe(true);
+    it("keeps the same retry budget in the durable queue", async () => {
+        await enqueueConversion(DATA);
+        const input = enqueueDbJob.mock.calls[0][1];
+        expect(input.maxAttempts).toBe(3);
     });
 
-    it("carries the version-flow fields (pdfKey, finalizeDocumentStatus) through", () => {
-        enqueueConversion({
+    it("carries the version-flow fields (pdfKey, finalizeDocumentStatus) through", async () => {
+        await enqueueConversion({
             ...DATA,
             pdfKey: "converted-pdfs/user-1/doc-1/slug.pdf",
             finalizeDocumentStatus: false,
         });
 
-        const data = add.mock.calls[0][1];
+        const data = enqueueDbJob.mock.calls[0][1].payload;
         expect(data.pdfKey).toBe("converted-pdfs/user-1/doc-1/slug.pdf");
         expect(data.finalizeDocumentStatus).toBe(false);
     });

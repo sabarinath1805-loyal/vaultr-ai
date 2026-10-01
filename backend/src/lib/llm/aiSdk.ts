@@ -11,14 +11,46 @@ import type {
   StreamChatResult,
 } from "./types";
 import { toProviderStreamError } from "./providerErrors";
+import { isInvalidApiKeyError } from "./apiKeyErrors";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
 import { guardedOutboundFetch } from "../outboundHttp";
 import {
   configuredLoopbackModelOrigins,
   configuredPrivateEndpointOrigins,
 } from "./providerOrigins";
+import { chatRequestLimits } from "../runtimeConfig";
 
 const MAX_OUTPUT_TOKENS = 16_384;
+const MAX_PROVIDER_ERROR_CLASSIFICATION_BYTES = 32 * 1024;
+
+/** Read only a small prefix for safe error classification; never retain or log
+ * the provider's raw error body. */
+async function readProviderErrorPrefix(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+
+  const decoder = new TextDecoder();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    while (bytes < MAX_PROVIDER_ERROR_CLASSIFICATION_BYTES) {
+      const part = await reader.read();
+      if (part.done) break;
+      const remaining = MAX_PROVIDER_ERROR_CLASSIFICATION_BYTES - bytes;
+      const chunk = part.value.subarray(0, remaining);
+      chunks.push(chunk);
+      bytes += chunk.byteLength;
+      if (chunk.byteLength < part.value.byteLength) break;
+    }
+  } catch {
+    // A failed body read carries no classification signal we need.
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+
+  return chunks.map((chunk) => decoder.decode(chunk, { stream: true })).join("") + decoder.decode();
+}
 
 /**
  * Tool-call rounds allowed per turn before `stopWhen` halts the run.
@@ -75,9 +107,15 @@ export async function aiSdkFetch(
   });
   if (!response.ok) {
     const status = response.status;
-    await response.body?.cancel().catch(() => undefined);
+    const errorPrefix = await readProviderErrorPrefix(response);
+    const safeMessage = isInvalidApiKeyError({
+      statusCode: status,
+      responseBody: errorPrefix,
+    })
+      ? "API key not valid."
+      : "Provider request failed.";
     return new Response(
-      JSON.stringify({ error: { message: "Provider request failed." } }),
+      JSON.stringify({ error: { message: safeMessage } }),
       {
         status,
         headers: { "content-type": "application/json; charset=utf-8" },
@@ -426,7 +464,11 @@ export async function streamAiSdk(
   let fullText = "";
   let iteration = 0;
   const openReasoningBlocks = new Set<string>();
-  const maxIterations = params.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+  const configuredIterationLimit = chatRequestLimits().maxToolIterations;
+  const maxIterations = Math.min(
+    params.maxIterations ?? configuredIterationLimit,
+    configuredIterationLimit,
+  );
   let lastFinishReason: string | undefined;
 
   try {

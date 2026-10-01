@@ -102,12 +102,17 @@ export async function sweepStaleGeneratingCells(
     }
 
     const useRedis = redisEnabled();
-    const jobLive = (jobId: string) =>
-        useRedis
-            ? withRedisTimeout("extraction job lookup", () =>
-                  getExtractionQueue().getJob(jobId),
-              ).then((j) => !!j)
-            : liveDbJobExists(db, jobId);
+    const jobLive = async (jobId: string) => {
+        const [bullLive, durableLive] = await Promise.all([
+            useRedis
+                ? withRedisTimeout("extraction job lookup", () =>
+                      getExtractionQueue().getJob(jobId),
+                  ).then((job) => !!job)
+                : Promise.resolve(false),
+            liveDbJobExists(db, jobId),
+        ]);
+        return bullLive || durableLive;
+    };
     // One liveness lookup per (review, row) — full-row jobs cover every cell
     // of their row; single-cell jobs are checked individually.
     const rowJobLive = new Map<string, boolean>();

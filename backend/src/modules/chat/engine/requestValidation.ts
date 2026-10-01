@@ -5,6 +5,7 @@ import {
   type ChatMessage,
 } from "./types";
 import { REASONING_LEVELS, type ReasoningLevel } from "../../../lib/llm/types";
+import { chatRequestLimits } from "../../../lib/runtimeConfig";
 
 type ValidationResult<T> =
   | { ok: true; value: T }
@@ -14,6 +15,9 @@ export type ChatDocumentReference = {
   filename: string;
   document_id: string;
 };
+
+export const MAX_CHAT_MESSAGE_CHARS = chatRequestLimits().maxMessageChars;
+export const MAX_CHAT_ATTACHMENTS_PER_TURN = chatRequestLimits().maxAttachmentsPerTurn;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -179,6 +183,13 @@ export function parseChatMessages(
   }
 
   const messages: ChatMessage[] = [];
+  const lastUserIndex = value.reduce(
+    (last, item, index) =>
+      isRecord(item) && item.role === "user" ? index : last,
+    -1,
+  );
+  const maxContextChars = chatRequestLimits().maxContextChars;
+  let totalContentChars = 0;
   for (const [index, message] of value.entries()) {
     if (!isRecord(message)) {
       return {
@@ -200,11 +211,38 @@ export function parseChatMessages(
         detail: `messages[${index}].content must be a string or null`,
       };
     }
+    if (
+      typeof message.content === "string" &&
+      message.content.length > MAX_CHAT_MESSAGE_CHARS
+    ) {
+      return {
+        ok: false,
+        detail: `messages[${index}].content exceeds the ${MAX_CHAT_MESSAGE_CHARS} character limit`,
+      };
+    }
+    if (typeof message.content === "string") {
+      totalContentChars += message.content.length;
+      if (totalContentChars > maxContextChars) {
+        return {
+          ok: false,
+          detail: `messages exceed the ${maxContextChars} character context limit`,
+        };
+      }
+    }
 
     let files: ChatMessage["files"];
     if (message.files !== undefined) {
       const parsedFiles = parseMessageFiles(message.files, index);
       if (!parsedFiles.ok) return parsedFiles;
+      if (
+        index === lastUserIndex &&
+        parsedFiles.value.length > MAX_CHAT_ATTACHMENTS_PER_TURN
+      ) {
+        return {
+          ok: false,
+          detail: `A turn may include at most ${MAX_CHAT_ATTACHMENTS_PER_TURN} attachments`,
+        };
+      }
       files = parsedFiles.value;
     }
 

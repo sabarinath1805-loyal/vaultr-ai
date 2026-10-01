@@ -66,6 +66,91 @@ export function uploadProcessingConfiguration(
   };
 }
 
+export function chatRequestLimits(env: NodeJS.ProcessEnv = process.env) {
+  return {
+    maxMessageChars: clamp(envInt("CHAT_MAX_MESSAGE_CHARS", 50_000, env), 1_000, 1_000_000),
+    maxAttachmentsPerTurn: clamp(
+      envInt("CHAT_MAX_ATTACHMENTS_PER_TURN", 20, env),
+      1,
+      100,
+    ),
+    maxContextChars: clamp(
+      envInt("CHAT_MAX_CONTEXT_CHARS", 200_000, env),
+      10_000,
+      2_000_000,
+    ),
+    maxToolIterations: clamp(
+      envInt("CHAT_MAX_TOOL_ITERATIONS", 16, env),
+      1,
+      64,
+    ),
+    maxToolCallsPerTurn: clamp(
+      envInt("CHAT_MAX_TOOL_CALLS_PER_TURN", 64, env),
+      1,
+      1_024,
+    ),
+  };
+}
+
+export function streamCapacityConfiguration(env: NodeJS.ProcessEnv = process.env) {
+  return {
+    maxPerUser: clamp(
+      envInt("LLM_MAX_CONCURRENT_STREAMS_PER_USER", 2, env),
+      1,
+      100,
+    ),
+    maxPerOrg: clamp(
+      envInt("LLM_MAX_CONCURRENT_STREAMS_PER_ORG", 20, env),
+      1,
+      1_000,
+    ),
+    maxDurationMs: clamp(
+      envInt("LLM_STREAM_MAX_DURATION_MS", 900_000, env),
+      30_000,
+      3_600_000,
+    ),
+    idleTimeoutMs: clamp(
+      envInt("LLM_STREAM_IDLE_TIMEOUT_MS", 120_000, env),
+      10_000,
+      600_000,
+    ),
+    memoryMaxKeys: clamp(
+      envInt("STREAM_CAPACITY_MEMORY_MAX_KEYS", 10_000, env),
+      100,
+      100_000,
+    ),
+  };
+}
+
+export function queueCapacityConfiguration(env: NodeJS.ProcessEnv = process.env) {
+  return {
+    maxGlobal: clamp(envInt("JOB_QUEUE_MAX_GLOBAL", 500, env), 10, 100_000),
+    maxPerUser: clamp(envInt("JOB_QUEUE_MAX_PER_USER", 100, env), 1, 10_000),
+    maxPerOrg: clamp(envInt("JOB_QUEUE_MAX_PER_ORG", 200, env), 1, 50_000),
+    maxConcurrentPerUser: clamp(
+      envInt("JOB_MAX_CONCURRENT_PER_USER", 2, env),
+      1,
+      100,
+    ),
+  };
+}
+
+function nonNegativeEnvInt(name: string, fallback: number, env: NodeJS.ProcessEnv): number {
+  const raw = env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+export function uploadStorageQuotaConfiguration(env: NodeJS.ProcessEnv = process.env) {
+  return {
+    // Zero disables the corresponding quota. Local deployments retain the
+    // existing generous upload/session caps unless an operator opts in.
+    maxBytesPerUser: nonNegativeEnvInt("UPLOAD_STORAGE_QUOTA_BYTES_PER_USER", 0, env),
+    maxBytesPerOrg: nonNegativeEnvInt("UPLOAD_STORAGE_QUOTA_BYTES_PER_ORG", 0, env),
+  };
+}
+
 /**
  * Hard deadline for one LibreOffice conversion. A wedged `soffice` child would
  * otherwise hold its worker slot for the life of the process.

@@ -160,6 +160,8 @@ services:
       - ./backend/migrations/20260926_01_restrict_public_table_defaults.sql:/public-table-defaults-migration.sql:ro
       - ./backend/migrations/20260927_01_restrict_postgres_public_object_defaults.sql:/public-object-defaults-migration.sql:ro
       - ./backend/migrations/20260928_01_upload_staging_reconciliation.sql:/upload-staging-reconciliation-migration.sql:ro
+      - ./backend/migrations/20261001_01_bind_user_api_keys_to_provider_origin.sql:/api-key-origin-migration.sql:ro
+      - ./backend/migrations/20261001_02_ws6_capacity_limits.sql:/ws6-capacity-migration.sql:ro
     entrypoint: ["bash", "-c"]
     command:
       - |
@@ -204,6 +206,8 @@ services:
         psql "$$DB" -v ON_ERROR_STOP=1 -f /public-table-defaults-migration.sql;
         psql "$$DB" -v ON_ERROR_STOP=1 -f /public-object-defaults-migration.sql;
         psql "$$DB" -v ON_ERROR_STOP=1 -f /upload-staging-reconciliation-migration.sql || exit 1;
+        psql "$$DB" -v ON_ERROR_STOP=1 -f /api-key-origin-migration.sql || exit 1;
+        psql "$$DB" -v ON_ERROR_STOP=1 -f /ws6-capacity-migration.sql || exit 1;
         psql "$$DB" -c "grant usage on schema public to service_role;
           grant all privileges on all tables in schema public to service_role;
           grant all privileges on all sequences in schema public to service_role;

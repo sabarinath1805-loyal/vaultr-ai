@@ -16,7 +16,7 @@ const ASK_RESPONSE_IDS = {
 };
 
 describe("chat request validation", () => {
-  it("normalizes valid messages and their nested metadata", () => {
+    it("normalizes valid messages and their nested metadata", () => {
     expect(
             parseChatMessages([
                 {
@@ -56,6 +56,51 @@ describe("chat request validation", () => {
                 { role: "assistant", content: null },
             ],
         });
+    });
+
+    it("bounds message content and attachments before model context is built", () => {
+        expect(
+            parseChatMessages([
+                { role: "user", content: "x".repeat(50_001) },
+            ]),
+        ).toEqual({
+            ok: false,
+            detail: "messages[0].content exceeds the 50000 character limit",
+        });
+
+        expect(
+            parseChatMessages([
+                {
+                    role: "user",
+                    content: "review these",
+                    files: Array.from({ length: 21 }, (_, index) => ({
+                        filename: `file-${index}.pdf`,
+                    })),
+                },
+            ]),
+        ).toEqual({
+            ok: false,
+            detail: "A turn may include at most 20 attachments",
+        });
+    });
+
+    it("caps total submitted context while preserving historical file references", () => {
+        const tooLarge = parseChatMessages(
+            Array.from({ length: 5 }, (_, index) => ({
+                role: index === 4 ? "user" : "assistant",
+                content: "x".repeat(50_000),
+            })),
+        );
+        expect(tooLarge).toEqual({
+            ok: false,
+            detail: "messages exceed the 200000 character context limit",
+        });
+
+        const historical = parseChatMessages([
+            { role: "user", content: "earlier", files: Array.from({ length: 20 }, (_, index) => ({ filename: `f${index}.pdf` })) },
+            { role: "user", content: "now", files: [{ filename: "current.pdf" }] },
+        ]);
+        expect(historical.ok).toBe(true);
     });
 
     it.each([

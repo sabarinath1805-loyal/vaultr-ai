@@ -101,11 +101,15 @@ export async function sweepStaleProcessingDocuments(
             // freed from the dedupe index (DB queue), so existence is the
             // liveness signal on either driver.
             const jobId = conversionJobId(doc.current_version_id, storagePath);
-            const live = redisEnabled()
-                ? !!(await withRedisTimeout("conversion job lookup", () =>
-                      getConversionQueue().getJob(jobId),
-                  ))
-                : await liveDbJobExists(db, jobId);
+            const [bullLive, durableLive] = await Promise.all([
+                redisEnabled()
+                    ? withRedisTimeout("conversion job lookup", () =>
+                          getConversionQueue().getJob(jobId),
+                      ).then((job) => !!job)
+                    : Promise.resolve(false),
+                liveDbJobExists(db, jobId),
+            ]);
+            const live = bullLive || durableLive;
             if (live) continue;
         }
         const { error: updateErr } = await db
