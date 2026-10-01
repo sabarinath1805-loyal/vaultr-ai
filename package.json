@@ -5,7 +5,8 @@
         "test:e2e": "playwright test",
         "test:e2e:local": "bash scripts/e2e-local-stack.sh",
         "test:e2e:headed": "playwright test --headed",
-        "test:e2e:ui": "playwright test --ui"
+        "test:e2e:ui": "playwright test --ui",
+        "test:security": "node scripts/test-security-suite.mjs"
     },
     "devDependencies": {
         "@axe-core/playwright": "^4.13.0",

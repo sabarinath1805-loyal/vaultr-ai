@@ -1,0 +1,217 @@
+{
+  "version": 1,
+  "groups": [
+    {
+      "name": "Suite inventory guard",
+      "runner": "node",
+      "files": ["scripts/security-test-membership.test.mjs"]
+    },
+    {
+      "name": "WS1 parser isolation",
+      "runner": "backend-vitest",
+      "files": [
+        "src/lib/__tests__/runtimeConfig.test.ts",
+        "src/lib/__tests__/spreadsheet.test.ts",
+        "src/lib/__tests__/spreadsheetSupervisor.test.ts",
+        "src/__tests__/integration/spreadsheetIsolation.test.ts",
+        "src/modules/chat/engine/tools/documentOps.spreadsheet.test.ts",
+        "src/modules/tabular/__tests__/tabular.spreadsheet.test.ts",
+        "src/modules/tabular/__tests__/tabular.extract.sanitize.test.ts",
+        "src/modules/uploads/__tests__/uploads.manifest.test.ts"
+      ]
+    },
+    {
+      "name": "WS2 database defaults",
+      "runner": "backend-vitest",
+      "files": [
+        "src/__tests__/composeMigrations.test.ts",
+        "src/__tests__/orgAccessFollowup.migration.test.ts",
+        "src/__tests__/integration/defaultPostgresObjectAcl.supabase.test.ts",
+        "src/__tests__/integration/defaultPublicTableAcl.supabase.test.ts"
+      ]
+    },
+    {
+      "name": "WS3 DOCX rendering",
+      "runner": "frontend-vitest",
+      "files": [
+        "src/app/components/shared/views/DocxPreview.security.test.tsx",
+        "src/app/components/shared/views/DocxView.security.test.tsx"
+      ]
+    },
+    {
+      "name": "WS3 upload and document lifecycle",
+      "runner": "backend-vitest",
+      "files": [
+        "src/lib/__tests__/documentVersions.test.ts",
+        "src/lib/__tests__/downloadTokens.test.ts",
+        "src/lib/__tests__/storageErrors.test.ts",
+        "src/lib/__tests__/storageSignedUpload.test.ts",
+        "src/modules/documents/__tests__/documents.cleanup.test.ts",
+        "src/modules/documents/__tests__/documents.cleanupJobs.test.ts",
+        "src/modules/documents/__tests__/documents.copyFiles.test.ts",
+        "src/modules/documents/__tests__/documents.download.test.ts",
+        "src/modules/documents/__tests__/documents.lifecycle.test.ts",
+        "src/modules/documents/__tests__/documents.versions.test.ts",
+        "src/modules/uploads/__tests__/uploads.access.test.ts",
+        "src/modules/uploads/__tests__/uploads.processing.test.ts",
+        "src/__tests__/integration/documentsFile.routes.test.ts",
+        "src/__tests__/integration/documentsUpload.routes.test.ts",
+        "src/__tests__/integration/uploadSessions.complete.routes.test.ts",
+        "src/__tests__/integration/uploadSessions.routes.test.ts"
+      ]
+    },
+    {
+      "name": "WS4 authorization and revocation",
+      "runner": "backend-vitest",
+      "files": [
+        "src/lib/__tests__/access.test.ts",
+        "src/lib/__tests__/authHandoff.test.ts",
+        "src/lib/__tests__/authSession.test.ts",
+        "src/lib/__tests__/documentContext.test.ts",
+        "src/lib/__tests__/orgAccessOverrideTarget.test.ts",
+        "src/lib/__tests__/orgAccessOverrides.test.ts",
+        "src/lib/__tests__/orgSqlPredicates.test.ts",
+        "src/lib/__tests__/orgs.test.ts",
+        "src/lib/__tests__/projectAccess.test.ts",
+        "src/lib/resourceAccessSummary.test.ts",
+        "src/lib/sourceDocuments.test.ts",
+        "src/lib/__tests__/userDataCleanup.orgs.test.ts",
+        "src/lib/__tests__/userDataCleanup.test.ts",
+        "src/lib/__tests__/userDataExport.grants.test.ts",
+        "src/lib/__tests__/workflowAssetReplication.test.ts",
+        "src/modules/auth/__tests__/auth.test.ts",
+        "src/modules/chat/engine/__tests__/projectDocumentContext.test.ts",
+        "src/modules/chat/engine/__tests__/streamingRevocation.test.ts",
+        "src/modules/chat/engine/tools/__tests__/toolDispatcher.revocation.test.ts",
+        "src/modules/memory/__tests__/memory.curator.revocation.test.ts",
+        "src/modules/project-chat/__tests__/projectChat.service.test.ts",
+        "src/modules/projects/__tests__/projects.chats.test.ts",
+        "src/modules/tabular/__tests__/tabular.extraction.test.ts",
+        "src/modules/tabular/__tests__/tabular.rows.revocation.test.ts",
+        "src/__tests__/integration/access.supabase.test.ts",
+        "src/__tests__/integration/documents.routes.test.ts",
+        "src/__tests__/integration/memory.routes.test.ts",
+        "src/__tests__/integration/orgs.routes.test.ts",
+        "src/__tests__/integration/projectChat.routes.test.ts",
+        "src/__tests__/integration/projects.routes.test.ts",
+        "src/__tests__/integration/workflowAddons.routes.test.ts",
+        "src/__tests__/integration/workflows.routes.test.ts"
+      ]
+    },
+    {
+      "name": "WS4 client permission boundaries",
+      "runner": "frontend-vitest",
+      "files": [
+        "src/app/(pages)/projects/[id]/assistant/chat/[chatId]/page.roles.test.tsx",
+        "src/app/(pages)/projects/[id]/assistant/page.roles.test.tsx",
+        "src/app/components/assistant/ChatAccessModal.test.tsx",
+        "src/app/components/modals/AccessEditor.test.tsx",
+        "src/app/components/modals/AccessModal.test.tsx",
+        "src/app/components/organizations/OrganizationModals.test.tsx",
+        "src/app/components/organizations/OrganizationWorkspace.test.tsx",
+        "src/app/components/organizations/OrganizationsOverview.test.tsx",
+        "src/app/components/projects/ProjectAssistantTable.roles.test.tsx",
+        "src/app/components/projects/ProjectDocumentsView.roles.test.tsx",
+        "src/app/components/projects/ProjectsOverview.refusals.test.tsx",
+        "src/app/components/settings/ApiKeyField.test.tsx",
+        "src/app/components/shared/SidebarChatItem.roles.test.tsx",
+        "src/app/components/tabular/TabularReviewView.access.test.tsx",
+        "src/app/lib/authApi.test.ts",
+        "src/app/lib/authRedirects.test.ts",
+        "src/app/lib/permissions.test.ts"
+      ]
+    },
+    {
+      "name": "WS5 rate limits and route coverage",
+      "runner": "backend-vitest",
+      "files": [
+        "src/lib/__tests__/rateLimit.test.ts",
+        "src/__tests__/integration/asyncExports.routes.test.ts",
+        "src/__tests__/integration/ws5RateLimits.test.ts",
+        "src/__tests__/integration/ws5UploadAdmission.test.ts",
+        "src/__tests__/integration/ws5bProductionRateLimits.test.ts",
+        "src/__tests__/rateLimitRouteCoverage.test.ts"
+      ]
+    },
+    {
+      "name": "Cleanup tool authorization, export retry, URL and error guards",
+      "runner": "backend-vitest",
+      "files": [
+        "src/lib/__tests__/courtlistenerPagination.test.ts",
+        "src/lib/__tests__/outboundHttp.test.ts",
+        "src/lib/__tests__/toolDispatcherSpotlight.test.ts",
+        "src/lib/dbq/__tests__/handlers.test.ts",
+        "src/lib/httpError.test.ts",
+        "src/lib/mcp/__tests__/client.ssrf.test.ts",
+        "src/lib/mcp/__tests__/errors.concise.test.ts",
+        "src/lib/observability/sentryPrivacy.test.ts",
+        "src/middleware/internalErrorResponse.test.ts",
+        "src/modules/chat/engine/tools/toolCapabilities.test.ts"
+      ]
+    },
+    {
+      "name": "WS6 BYO endpoint, key handling and capacity",
+      "runner": "backend-vitest",
+      "files": [
+        "src/lib/__tests__/configuredModels.test.ts",
+        "src/lib/__tests__/llmModels.test.ts",
+        "src/lib/__tests__/llmProviders.test.ts",
+        "src/lib/__tests__/localModelMiddleware.test.ts",
+        "src/lib/__tests__/modelSelection.test.ts",
+        "src/lib/__tests__/streamCapacity.test.ts",
+        "src/lib/dbq/__tests__/enqueue.test.ts",
+        "src/lib/llm/aiSdk.toolErrors.test.ts",
+        "src/lib/llm/apiKeyErrors.test.ts",
+        "src/lib/llm/providerErrors.test.ts",
+        "src/lib/mcp/oauth.test.ts",
+        "src/lib/mcp/providers.test.ts",
+        "src/lib/mcp/servers.test.ts",
+        "src/modules/models/__tests__/models.test.ts",
+        "src/modules/user/__tests__/user.apiKeyStore.test.ts",
+        "src/__tests__/integration/ws6Capacity.supabase.test.ts"
+      ]
+    },
+    {
+      "name": "WS6b network guard and local-first egress",
+      "runner": "backend-vitest",
+      "files": [
+        "src/__tests__/networkGuard.test.ts",
+        "src/lib/observability/sentry.test.ts",
+        "src/lib/observability/sentry.transport.test.ts"
+      ]
+    },
+    {
+      "name": "WS6b browser egress and local policies",
+      "runner": "frontend-vitest",
+      "files": [
+        "src/app/lib/errorReporting.test.ts",
+        "src/shared/lib/contentSecurityPolicy.test.ts",
+        "src/shared/lib/localFirstEgress.test.ts",
+        "src/shared/lib/sentryEvent.sync.test.ts",
+        "src/shared/lib/sentryEvent.test.ts",
+        "src/shared/lib/sentryPrivacy.test.ts"
+      ]
+    },
+    {
+      "name": "WS6b Word server egress guard",
+      "runner": "word-node",
+      "files": ["server.test.mjs"]
+    },
+    {
+      "name": "WS7 startup guard, templates and read-only probes",
+      "runner": "backend-vitest",
+      "files": [
+        "src/lib/__tests__/productionConfig.test.ts",
+        "src/lib/__tests__/productionDeploymentTemplates.test.ts"
+      ]
+    },
+    {
+      "name": "WS7 repository gates and verify scripts",
+      "runner": "node",
+      "files": [
+        "scripts/audit-gate.test.mjs",
+        "scripts/ws7-verify/test.mjs"
+      ]
+    }
+  ]
+}
