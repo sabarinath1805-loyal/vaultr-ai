@@ -17,6 +17,7 @@ import {
     encryptString,
     guardedFetch,
     loadConnector,
+    oauthTokenBoundToConnector,
     stateHash,
     validateRemoteMcpUrl,
 } from "./client";
@@ -492,7 +493,10 @@ export async function refreshOAuthAccessToken(row: OAuthTokenRow, db: Db) {
 
 async function oauthBearerToken(connector: ConnectorRow, db: Db) {
     let token = await loadOAuthToken(connector.id, db);
-    if (!token?.encrypted_access_token) {
+    if (
+        !token?.encrypted_access_token ||
+        !oauthTokenBoundToConnector(token, connector)
+    ) {
         throw new McpOAuthRequiredError();
     }
     const expiresAt = token.expires_at ? Date.parse(token.expires_at) : null;
@@ -544,7 +548,7 @@ export class DbMcpOAuthProvider implements OAuthClientProvider {
 
     async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
         const token = await loadOAuthToken(this.connector.id, this.db);
-        if (token?.client_id) {
+        if (token?.client_id && oauthTokenBoundToConnector(token, this.connector)) {
             const clientSecret = decryptString(
                 token.encrypted_client_secret,
                 token.client_secret_iv,
@@ -571,6 +575,10 @@ export class DbMcpOAuthProvider implements OAuthClientProvider {
         const row = {
             connector_id: this.connector.id,
             client_id: info.client_id,
+            // Bind dynamically registered client credentials too; an OAuth
+            // callback that races an endpoint edit must not reuse them for a
+            // different connector host.
+            resource: new URL(this.connector.server_url).toString(),
             ...tokenSecretPatch("client_secret", clientSecret),
             updated_at: new Date().toISOString(),
         };
@@ -582,7 +590,10 @@ export class DbMcpOAuthProvider implements OAuthClientProvider {
 
     async tokens(): Promise<OAuthTokens | undefined> {
         const row = await loadOAuthToken(this.connector.id, this.db);
-        if (!row?.encrypted_access_token) return undefined;
+        if (
+            !row?.encrypted_access_token ||
+            !oauthTokenBoundToConnector(row, this.connector)
+        ) return undefined;
         const accessToken = decryptString(
             row.encrypted_access_token,
             row.access_token_iv,
@@ -680,6 +691,7 @@ export class DbMcpOAuthProvider implements OAuthClientProvider {
             JSON.stringify({
                 codeVerifier,
                 redirectUri: this.redirectUri,
+                serverOrigin: new URL(this.connector.server_url).origin,
             } satisfies OAuthStateConfig),
         );
         await this.db.from("user_mcp_oauth_states").delete().eq(
@@ -874,6 +886,15 @@ export async function completeMcpConnectorOAuthAuthorization(
     if (!decrypted) throw new Error("OAuth state could not be decrypted.");
     const config = JSON.parse(decrypted) as OAuthStateConfig;
     const connector = await loadConnector(row.user_id, row.connector_id, db);
+    if (
+        !config.serverOrigin ||
+        config.serverOrigin !== new URL(connector.server_url).origin
+    ) {
+        await db.from("user_mcp_oauth_states").delete().eq("id", row.id);
+        throw new McpOAuthRequiredError(
+            "OAuth state is invalid or the connector endpoint changed.",
+        );
+    }
     const provider = new DbMcpOAuthProvider(
         db,
         connector,

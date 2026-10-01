@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../outboundHttp", () => ({ guardedOutboundFetch: vi.fn() }));
+import { guardedOutboundFetch } from "../outboundHttp";
+
 import { aiSdkFetch, streamAiSdk } from "./aiSdk";
 
 function streamResponse(chunks: unknown[]): Response {
@@ -26,6 +29,7 @@ function functionTool(name: string) {
 describe("aiSdkFetch", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.mocked(guardedOutboundFetch).mockReset();
   });
 
   it("forwards clean malformed tool arguments and the final usage frame unchanged", async () => {
@@ -60,14 +64,11 @@ describe("aiSdkFetch", () => {
       })}\n\n`,
       "data: [DONE]\n\n",
     ].join("");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(body, {
-          status: 200,
-          headers: { "Content-Type": "text/event-stream" },
-        }),
-      ),
+    vi.mocked(guardedOutboundFetch).mockResolvedValue(
+      new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
     );
 
     const response = await aiSdkFetch(
@@ -86,8 +87,7 @@ describe("aiSdkFetch", () => {
     // The OpenAI-compatible parser forwards malformed input to Core 7, which
     // emits a dynamic tool-error rather than calling Mike's tool executor.
     const malformedArguments = '{"title":"Example Report","sections":';
-    const fetchMock = vi
-      .fn()
+    vi.mocked(guardedOutboundFetch)
       .mockResolvedValueOnce(
         streamResponse([
           {
@@ -132,7 +132,6 @@ describe("aiSdkFetch", () => {
           },
         ]),
       );
-    vi.stubGlobal("fetch", fetchMock);
     const openAICompatible = createOpenAICompatible({
       name: "openai-compatible-test",
       apiKey: "test-key",
@@ -162,6 +161,6 @@ describe("aiSdkFetch", () => {
 
     expect(result.fullText).toBe("Recovered");
     expect(runTools).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(guardedOutboundFetch).toHaveBeenCalledTimes(2);
   });
 });

@@ -259,22 +259,48 @@ export async function updateUserMcpConnector(
     const update: Record<string, unknown> = {
         updated_at: new Date().toISOString(),
     };
+    let current: ConnectorRow | null = null;
+    let endpointChanged = false;
     if (typeof input.name === "string") {
         const name = input.name.trim().slice(0, 80);
         if (!name) throw new Error("Connector name is required.");
         update.name = name;
     }
     if (typeof input.serverUrl === "string") {
-        update.server_url = await validateRemoteMcpUrl(input.serverUrl.trim());
+        current = await loadConnector(userId, connectorId, db);
+        const serverUrl = await validateRemoteMcpUrl(input.serverUrl.trim());
+        const previousOrigin = new URL(current.server_url).origin;
+        endpointChanged = new URL(serverUrl).origin !== previousOrigin;
+        if (endpointChanged) {
+            // A connector's bearer/custom-header and OAuth credentials are
+            // bound to the host where the user authorized them. Invalidate
+            // them before changing authority; an explicit credential in this
+            // same request is treated as freshly entered for the new host.
+            const { error: tokenError } = await db
+                .from("user_mcp_oauth_tokens")
+                .delete()
+                .eq("connector_id", connectorId);
+            if (tokenError) throw tokenError;
+            const { error: stateError } = await db
+                .from("user_mcp_oauth_states")
+                .delete()
+                .eq("connector_id", connectorId);
+            if (stateError) throw stateError;
+            const { error: toolsError } = await db
+                .from("user_mcp_connector_tools")
+                .update({ enabled: false, updated_at: new Date().toISOString() })
+                .eq("connector_id", connectorId);
+            if (toolsError) throw toolsError;
+            Object.assign(update, authConfigPatch({}), { auth_type: "none" });
+        }
+        update.server_url = serverUrl;
     }
     if (typeof input.enabled === "boolean") {
         update.enabled = input.enabled;
     }
     if ("bearerToken" in input || "headers" in input) {
-        const current = await loadConnector(userId, connectorId, db).catch(
-            () => null,
-        );
-        const nextConfig: McpConnectorAuthConfig = current
+        current ??= await loadConnector(userId, connectorId, db).catch(() => null);
+        const nextConfig: McpConnectorAuthConfig = current && !endpointChanged
             ? decryptAuthConfig(current)
             : {};
         if ("bearerToken" in input) {
@@ -289,7 +315,7 @@ export async function updateUserMcpConnector(
         }
         Object.assign(update, authConfigPatch(nextConfig));
         if (nextConfig.bearerToken?.trim()) update.auth_type = "bearer";
-        else if (current?.auth_type !== "oauth") update.auth_type = "none";
+        else if (endpointChanged || current?.auth_type !== "oauth") update.auth_type = "none";
     }
 
     const { data, error } = await db

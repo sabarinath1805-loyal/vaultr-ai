@@ -82,6 +82,7 @@ export type OAuthTokenRow = {
 export type OAuthStateConfig = {
     codeVerifier: string;
     redirectUri: string;
+    serverOrigin?: string;
     authorizationServer?: string;
     tokenEndpoint?: string;
     clientId?: string;
@@ -122,5 +123,7 @@ export const MAX_CUSTOM_HEADERS = 20;
 export const MAX_CUSTOM_HEADER_VALUE_LENGTH = 4096;
 export const BLOCKED_METADATA_HOSTS = new Set([
     "metadata.google.internal",
+    "metadata.azure.internal",
+    "metadata",
     "instance-data",
 ]);

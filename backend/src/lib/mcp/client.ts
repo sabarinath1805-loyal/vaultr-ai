@@ -2,7 +2,11 @@ import crypto from "crypto";
 import dns from "dns/promises";
 import net from "net";
 import { Agent, fetch as undiciFetch } from "undici";
-import { isBlockedIp } from "../privateIp";
+import {
+    isAllowlistablePrivateIp,
+    isBlockedIp,
+    isLoopbackIp,
+} from "../privateIp";
 import { configuredApiPublicUrl } from "../runtimeConfig";
 import {
     BLOCKED_METADATA_HOSTS,
@@ -230,7 +234,9 @@ export function toConnectorSummary(
         enabled: connector.enabled,
         hasAuthConfig: !!connector.encrypted_auth_config,
         customHeaderKeys: Object.keys(authConfig.headers ?? {}),
-        oauthConnected: !!oauthToken?.encrypted_access_token,
+        oauthConnected:
+            !!oauthToken?.encrypted_access_token &&
+            oauthTokenBoundToConnector(oauthToken, connector),
         toolPolicy: connector.tool_policy ?? {},
         tools: tools.map(toToolSummary),
         toolCount,
@@ -239,30 +245,121 @@ export function toConnectorSummary(
     };
 }
 
+/** OAuth credentials are usable only for the connector origin they were issued for. */
+export function oauthTokenBoundToConnector(
+    token: Pick<OAuthTokenRow, "resource">,
+    connector: Pick<ConnectorRow, "server_url">,
+): boolean {
+    try {
+        return new URL(String(token.resource ?? "")).origin ===
+            new URL(connector.server_url).origin;
+    } catch {
+        return false;
+    }
+}
+
 // Private/reserved IP classification lives in lib/privateIp.ts so every
 // guarded egress check reuses the exact same ranges.
 
-export async function validateRemoteMcpUrl(rawUrl: string): Promise<string> {
+export type OutboundFetchPolicy = {
+    allowedPrivateOrigins?: readonly string[];
+    allowedLoopbackOrigins?: readonly string[];
+    connectTimeoutMs?: number;
+    headersTimeoutMs?: number;
+    bodyTimeoutMs?: number;
+    idleTimeoutMs?: number;
+    totalTimeoutMs?: number;
+    maxResponseBytes?: number;
+    followRedirects?: boolean;
+};
+
+const DEFAULT_OUTBOUND_POLICY: Required<OutboundFetchPolicy> = {
+    allowedPrivateOrigins: [],
+    allowedLoopbackOrigins: [],
+    connectTimeoutMs: 10_000,
+    headersTimeoutMs: 20_000,
+    bodyTimeoutMs: 30_000,
+    idleTimeoutMs: 30_000,
+    totalTimeoutMs: 120_000,
+    maxResponseBytes: 8 * 1024 * 1024,
+    followRedirects: true,
+};
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+    let handle: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([
+        promise,
+        new Promise<never>((_, reject) => {
+            handle = setTimeout(() => reject(new Error(message)), timeoutMs);
+            handle.unref?.();
+        }),
+    ]).finally(() => {
+        if (handle) clearTimeout(handle);
+    });
+}
+
+function policyOrigins(policy: OutboundFetchPolicy): {
+    privateOrigins: Set<string>;
+    loopbackOrigins: Set<string>;
+} {
+    const normalized = (values: readonly string[] | undefined) =>
+        new Set(
+            (values ?? []).flatMap((value) => {
+                try {
+                    const url = new URL(value);
+                    return [url.origin];
+                } catch {
+                    return [];
+                }
+            }),
+        );
+    return {
+        privateOrigins: normalized(policy.allowedPrivateOrigins),
+        loopbackOrigins: normalized(policy.allowedLoopbackOrigins),
+    };
+}
+
+function addressAllowed(address: string, origin: string, policy: OutboundFetchPolicy): boolean {
+    if (!isBlockedIp(address)) return true;
+    const { privateOrigins, loopbackOrigins } = policyOrigins(policy);
+    if (loopbackOrigins.has(origin) && isLoopbackIp(address)) return true;
+    return privateOrigins.has(origin) && isAllowlistablePrivateIp(address);
+}
+
+export async function validateRemoteMcpUrl(
+    rawUrl: string,
+    policy: OutboundFetchPolicy = {},
+): Promise<string> {
     let url: URL;
     try {
         url = new URL(rawUrl);
     } catch {
         throw new Error("MCP server URL must be a valid URL.");
     }
-    if (url.protocol !== "https:") {
-        throw new Error("MCP server URL must use HTTPS.");
+    if (url.username || url.password) {
+        throw new Error("Outbound URL must not include userinfo.");
     }
-    url.username = "";
-    url.password = "";
     url.hash = "";
 
-    const hostname = url.hostname.toLowerCase();
+    const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
     if (
         hostname === "localhost" ||
         hostname.endsWith(".localhost") ||
         BLOCKED_METADATA_HOSTS.has(hostname)
     ) {
-        throw new Error("MCP server URL points to a blocked host.");
+        const { loopbackOrigins } = policyOrigins(policy);
+        if (!(loopbackOrigins.has(url.origin) && (hostname === "localhost" || hostname.endsWith(".localhost")))) {
+            throw new Error("Outbound URL points to a blocked host.");
+        }
+    }
+    const { privateOrigins, loopbackOrigins } = policyOrigins(policy);
+    const isExplicitPrivate = privateOrigins.has(url.origin);
+    const isExplicitLoopback = loopbackOrigins.has(url.origin);
+    if (
+        url.protocol !== "https:" &&
+        !(url.protocol === "http:" && (isExplicitPrivate || isExplicitLoopback))
+    ) {
+        throw new Error("MCP server URL must use HTTPS.");
     }
 
     // URL.hostname wraps IPv6 literals in brackets ("[::1]"), which net.isIP
@@ -276,9 +373,13 @@ export async function validateRemoteMcpUrl(rawUrl: string): Promise<string> {
     const literalFamily = net.isIP(literalHost);
     const addresses = literalFamily
         ? [{ address: literalHost }]
-        : await dns.lookup(hostname, { all: true, verbatim: true });
-    if (!addresses.length || addresses.some(({ address }) => isBlockedIp(address))) {
-        throw new Error("MCP server URL resolves to a blocked network address.");
+        : await withTimeout(
+              dns.lookup(hostname, { all: true, verbatim: true }),
+              10_000,
+              "Outbound DNS lookup timed out.",
+          );
+    if (!addresses.length || addresses.some(({ address }) => !addressAllowed(address, url.origin, policy))) {
+        throw new Error("Outbound URL resolves to a blocked network address.");
     }
 
     return url.toString();
@@ -286,12 +387,22 @@ export async function validateRemoteMcpUrl(rawUrl: string): Promise<string> {
 
 export function headersForAuth(config: McpConnectorAuthConfig) {
     const headers: Record<string, string> = {};
+    const forbidden = new Set([
+        "host", "connection", "content-length", "transfer-encoding",
+        "proxy-authorization", "proxy-connection", "te", "trailer", "upgrade",
+    ]);
     for (const [key, value] of Object.entries(config.headers ?? {})) {
-        if (typeof value === "string" && key.toLowerCase() !== "host") {
-            headers[key] = value;
+        if (
+            typeof value === "string" &&
+            HEADER_NAME_RE.test(key) &&
+            !forbidden.has(key.toLowerCase()) &&
+            !/[\r\n\0]/.test(value)
+        ) {
+            headers[key.toLowerCase()] = value;
         }
     }
     if (config.bearerToken?.trim()) {
+        delete headers.authorization;
         headers.Authorization = `Bearer ${config.bearerToken.trim()}`;
     }
     return headers;
@@ -311,7 +422,10 @@ export function validateCustomHeaders(
     const headers: Record<string, string> = {};
     for (const [key, value] of entries) {
         const trimmedKey = key.trim();
-        if (!HEADER_NAME_RE.test(trimmedKey) || trimmedKey.toLowerCase() === "host") {
+        if (
+            !HEADER_NAME_RE.test(trimmedKey) ||
+            ["host", "connection", "content-length", "transfer-encoding", "proxy-authorization", "proxy-connection", "te", "trailer", "upgrade"].includes(trimmedKey.toLowerCase())
+        ) {
             throw new Error(`Invalid custom header name: ${key}`);
         }
         if (
@@ -321,6 +435,9 @@ export function validateCustomHeaders(
             throw new Error(
                 `Custom header ${key} must be a string of ${MAX_CUSTOM_HEADER_VALUE_LENGTH} characters or fewer.`,
             );
+        }
+        if (/[\r\n\0]/.test(value)) {
+            throw new Error(`Custom header ${key} must not contain control characters.`);
         }
         headers[trimmedKey] = value;
     }
@@ -343,41 +460,155 @@ export function authConfigPatch(config: McpConnectorAuthConfig): Record<string, 
     });
 }
 
-// A shared undici dispatcher whose DNS lookup runs the private-IP guard at the
-// moment a socket is opened and returns ONLY validated addresses. Because
-// undici connects to exactly what this lookup yields, the address we validate is
-// the address we connect to — there is no second, unguarded resolution for an
-// attacker to race (DNS-rebinding / TOCTOU). Reusing the dispatcher also lets
-// undici pool validated HTTPS connections instead of leaving a new Agent and
-// keep-alive socket behind for every MCP request.
-const guardedAgent = new Agent({
-    connect: {
-        lookup: (hostname, _options, callback) => {
-            dns.lookup(hostname, { all: true, verbatim: true })
-                .then((addresses) => {
-                    if (
-                        !addresses.length ||
-                        addresses.some(({ address }) => isBlockedIp(address))
-                    ) {
-                        callback(
-                            new Error(
-                                "MCP server URL resolves to a blocked network address.",
-                            ),
-                            [],
+const outboundAgents = new Map<string, Agent>();
+const MAX_OUTBOUND_AGENT_POLICIES = 16;
+
+function outboundAgent(policy: OutboundFetchPolicy): Agent {
+    const effective = { ...DEFAULT_OUTBOUND_POLICY, ...policy };
+    const key = JSON.stringify({
+        private: [...(effective.allowedPrivateOrigins ?? [])].sort(),
+        loopback: [...(effective.allowedLoopbackOrigins ?? [])].sort(),
+        connectTimeoutMs: effective.connectTimeoutMs,
+        headersTimeoutMs: effective.headersTimeoutMs,
+        bodyTimeoutMs: effective.idleTimeoutMs ?? effective.bodyTimeoutMs,
+        idleTimeoutMs: effective.idleTimeoutMs,
+    });
+    const existing = outboundAgents.get(key);
+    if (existing) return existing;
+    if (outboundAgents.size >= MAX_OUTBOUND_AGENT_POLICIES) {
+        // Policy cardinality is operator-controlled in current call sites.
+        // Keep a bounded LRU-like pool so test/local endpoints can change
+        // without accumulating sockets for every previous origin.
+        const oldest = outboundAgents.entries().next().value as
+            | [string, Agent]
+            | undefined;
+        if (oldest) {
+            outboundAgents.delete(oldest[0]);
+            void oldest[1].close().catch(() => undefined);
+        }
+    }
+
+    const agent = new Agent({
+        maxOrigins: 64,
+        connections: 8,
+        keepAliveTimeout: 1_000,
+        keepAliveMaxTimeout: 1_000,
+        connectTimeout: effective.connectTimeoutMs,
+        headersTimeout: effective.headersTimeoutMs,
+        bodyTimeout: effective.idleTimeoutMs ?? effective.bodyTimeoutMs,
+        maxHeaderSize: 16 * 1024,
+        connect: {
+            lookup: (rawHostname, _options, callback) => {
+                const hostname = rawHostname.toLowerCase().replace(/\.$/, "");
+                const literalHost =
+                    hostname.startsWith("[") && hostname.endsWith("]")
+                        ? hostname.slice(1, -1)
+                        : hostname;
+                const literalFamily = net.isIP(literalHost);
+                const resolution = literalFamily
+                    ? Promise.resolve([{ address: literalHost, family: literalFamily }])
+                    : withTimeout(
+                          dns.lookup(hostname, { all: true, verbatim: true }),
+                          effective.connectTimeoutMs,
+                          "Outbound DNS lookup timed out.",
+                      );
+                resolution
+                    .then((addresses) => {
+                        const permittedPrivate = new Set(
+                            effective.allowedPrivateOrigins
+                                .map((origin) => {
+                                    try { return new URL(origin).hostname.toLowerCase().replace(/\.$/, ""); }
+                                    catch { return ""; }
+                                })
+                                .filter(Boolean),
                         );
-                        return;
-                    }
-                    callback(null, addresses);
-                })
-                .catch((err: unknown) =>
-                    callback(
-                        err instanceof Error ? err : new Error(String(err)),
-                        [],
-                    ),
-                );
+                        const permittedLoopback = new Set(
+                            effective.allowedLoopbackOrigins
+                                .map((origin) => {
+                                    try { return new URL(origin).hostname.toLowerCase().replace(/\.$/, ""); }
+                                    catch { return ""; }
+                                })
+                                .filter(Boolean),
+                        );
+                        const originHostAllowed = permittedPrivate.has(hostname) || permittedLoopback.has(hostname);
+                        if (
+                            !addresses.length ||
+                            addresses.some(({ address }) =>
+                                isBlockedIp(address) &&
+                                !(originHostAllowed && (
+                                    (permittedLoopback.has(hostname) && isLoopbackIp(address)) ||
+                                    (permittedPrivate.has(hostname) && isAllowlistablePrivateIp(address))
+                                )),
+                            )
+                        ) {
+                            callback(new Error("Outbound URL resolves to a blocked network address."), []);
+                            return;
+                        }
+                        callback(null, addresses);
+                    })
+                    .catch(() => callback(new Error("Outbound DNS lookup failed."), []));
+            },
         },
-    },
-});
+    });
+    outboundAgents.set(key, agent);
+    return agent;
+}
+
+function boundedResponse(
+    response: Response,
+    controller: AbortController,
+    policy: Required<OutboundFetchPolicy>,
+    clearTotalTimeout: () => void,
+): Response {
+    if (!response.body) {
+        clearTotalTimeout();
+        return response;
+    }
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > policy.maxResponseBytes) {
+        controller.abort();
+        clearTotalTimeout();
+        void response.body.cancel().catch(() => undefined);
+        throw new Error("Outbound response exceeded the configured size limit.");
+    }
+
+    const reader = response.body.getReader();
+    let bytes = 0;
+    const boundedBody = new ReadableStream<Uint8Array>({
+        async pull(target) {
+            try {
+                const part = await reader.read();
+                if (part.done) {
+                    clearTotalTimeout();
+                    target.close();
+                    return;
+                }
+                bytes += part.value.byteLength;
+                if (bytes > policy.maxResponseBytes) {
+                    controller.abort();
+                    await reader.cancel().catch(() => undefined);
+                    clearTotalTimeout();
+                    target.error(new Error("Outbound response exceeded the configured size limit."));
+                    return;
+                }
+                target.enqueue(part.value);
+            } catch {
+                clearTotalTimeout();
+                target.error(new Error("Outbound request failed."));
+            }
+        },
+        async cancel(reason) {
+            controller.abort();
+            clearTotalTimeout();
+            await reader.cancel(reason).catch(() => undefined);
+        },
+    });
+    return new Response(boundedBody, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+    });
+}
 
 // The single guarded egress helper for every outbound MCP request (connector
 // transport, OAuth discovery/registration/refresh). It rejects non-HTTPS,
@@ -396,7 +627,9 @@ const MAX_MCP_REDIRECTS = 5;
 export async function guardedFetch(
     input: Parameters<typeof fetch>[0],
     init?: Parameters<typeof fetch>[1],
+    policy: OutboundFetchPolicy = {},
 ): Promise<Response> {
+    const effective = { ...DEFAULT_OUTBOUND_POLICY, ...policy };
     const isRequest = typeof input === "object" && input instanceof Request;
     let url =
         typeof input === "string"
@@ -404,7 +637,7 @@ export async function guardedFetch(
             : input instanceof URL
               ? input.toString()
               : input.url;
-    await validateRemoteMcpUrl(url);
+    await validateRemoteMcpUrl(url, effective);
     // The request MUST go through the `undici` package's own `fetch`, not the
     // global one. Node's built-in fetch is a copy of undici frozen at the
     // version Node was built with (6.x on Node 22), while `guardedAgent` comes
@@ -426,11 +659,35 @@ export async function guardedFetch(
                   ...(input.body ? { duplex: "half" } : {}),
                   ...init,
               };
-    let response = (await undiciFetch(url, {
+    const externalSignal = (requestInit.signal as AbortSignal | undefined) ??
+        (isRequest ? input.signal : undefined);
+    const controller = new AbortController();
+    const abortFromParent = () => controller.abort(externalSignal?.reason);
+    if (externalSignal?.aborted) abortFromParent();
+    else externalSignal?.addEventListener("abort", abortFromParent, { once: true });
+    requestInit.signal = controller.signal;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const clearTotalTimeout = () => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        externalSignal?.removeEventListener("abort", abortFromParent);
+    };
+    timeoutHandle = setTimeout(
+        () => controller.abort(new Error("Outbound request timed out.")),
+        effective.totalTimeoutMs,
+    );
+    timeoutHandle.unref?.();
+
+    let response: Response;
+    try {
+        response = (await undiciFetch(url, {
         ...requestInit,
         redirect: "manual",
-        dispatcher: guardedAgent,
+        dispatcher: outboundAgent(effective),
     } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
+    } catch {
+        clearTotalTimeout();
+        throw new Error("Outbound request failed.");
+    }
 
     const method = (
         (requestInit.method as string | undefined) ??
@@ -440,7 +697,18 @@ export async function guardedFetch(
     // Only bodyless methods are followed. Replaying a POST body across a
     // redirect is not something any MCP flow needs, and skipping it avoids
     // having to reason about 307/308 body semantics.
-    if (method !== "GET" && method !== "HEAD") return response;
+    if (
+        !effective.followRedirects ||
+        method !== "GET" && method !== "HEAD"
+    ) {
+        if (response.status >= 300 && response.status <= 399 && !effective.followRedirects) {
+            await response.body?.cancel().catch(() => undefined);
+            controller.abort();
+            clearTotalTimeout();
+            throw new Error("Outbound request redirected; redirects are not followed.");
+        }
+        return boundedResponse(response, controller, effective, clearTotalTimeout);
+    }
 
     let headers = new Headers(
         (requestInit.headers as HeadersInit | undefined) ??
@@ -460,7 +728,15 @@ export async function guardedFetch(
         }
         await response.body?.cancel().catch(() => undefined);
 
-        const validated = await validateRemoteMcpUrl(target);
+        let validated: string;
+        try {
+            validated = await validateRemoteMcpUrl(target, effective);
+        } catch (error) {
+            await response.body?.cancel().catch(() => undefined);
+            controller.abort();
+            clearTotalTimeout();
+            throw error;
+        }
         // Header names configured for connector authentication are arbitrary,
         // so there is no complete denylist for secrets. On a cross-origin hop,
         // retain only the small set needed for GET/HEAD content negotiation.
@@ -475,15 +751,20 @@ export async function guardedFetch(
             headers = safeHeaders;
         }
         url = validated;
-        response = (await undiciFetch(validated, {
+        try {
+            response = (await undiciFetch(validated, {
             ...requestInit,
             method,
             headers: Object.fromEntries(headers.entries()),
             redirect: "manual",
-            dispatcher: guardedAgent,
+            dispatcher: outboundAgent(effective),
         } as Parameters<typeof undiciFetch>[1])) as unknown as Response;
+        } catch {
+            clearTotalTimeout();
+            throw new Error("Outbound request failed.");
+        }
     }
-    return response;
+    return boundedResponse(response, controller, effective, clearTotalTimeout);
 }
 
 export function base64Url(buffer: Buffer) {

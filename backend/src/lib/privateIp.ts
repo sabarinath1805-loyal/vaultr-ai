@@ -7,6 +7,7 @@ for (const [network, prefix] of [
     ["100.64.0.0", 10], // Shared address space (carrier-grade NAT)
     ["127.0.0.0", 8], // Loopback
     ["169.254.0.0", 16], // Link-local
+    ["168.63.129.16", 32], // Azure WireServer / platform virtual IP
     ["172.16.0.0", 12], // RFC 1918 private-use
     ["192.0.0.0", 24], // IETF protocol assignments
     ["192.0.2.0", 24], // Documentation (TEST-NET-1)
@@ -32,6 +33,18 @@ for (const [network, prefix] of [
 ] as const) {
     blockedIpv6.addSubnet(network, prefix, "ipv6");
 }
+
+const allowlistedPrivateIpv4 = new net.BlockList();
+for (const [network, prefix] of [
+    ["10.0.0.0", 8],
+    ["172.16.0.0", 12],
+    ["192.168.0.0", 16],
+] as const) {
+    allowlistedPrivateIpv4.addSubnet(network, prefix, "ipv4");
+}
+
+const allowlistedPrivateIpv6 = new net.BlockList();
+allowlistedPrivateIpv6.addSubnet("fc00::", 7, "ipv6");
 
 /**
  * SSRF guard helpers: classify an IP literal as private/reserved/unsafe.
@@ -143,4 +156,22 @@ export function isBlockedIp(ip: string): boolean {
     if (family === 4) return isPrivateIpv4(ip);
     if (family === 6) return isPrivateIpv6(ip);
     return true;
+}
+
+/** True only for the two loopback ranges; link-local and metadata stay blocked. */
+export function isLoopbackIp(ip: string): boolean {
+    const family = net.isIP(ip);
+    if (family === 4) return ip.split(".")[0] === "127";
+    if (family !== 6) return false;
+    const groups = expandIpv6Groups(ip);
+    return !!groups && groups.slice(0, 7).every((group) => group === 0) && groups[7] === 1;
+}
+
+/** RFC 1918 / IPv6 ULA only. Special-use and link-local ranges cannot be allowlisted. */
+export function isAllowlistablePrivateIp(ip: string): boolean {
+    const family = net.isIP(ip);
+    if (family === 4) return allowlistedPrivateIpv4.check(ip, "ipv4");
+    if (family !== 6) return false;
+    const groups = expandIpv6Groups(ip);
+    return !!groups && allowlistedPrivateIpv6.check(ip, "ipv6");
 }

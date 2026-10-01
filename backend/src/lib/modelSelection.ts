@@ -199,13 +199,17 @@ export function titleModelForChat(
     chatModel: string,
     titleOverride?: string | null,
 ): string {
-    const override = resolveModel(titleOverride, "");
-    if (override) return override;
-
     const resolvedChatModel = resolveModel(chatModel, "");
     if (!resolvedChatModel) {
         throw new Error("A supported chat model is required for title generation");
     }
+
+    // Local-first means a local chat must not silently make a cloud call for
+    // its automatic title, even when an older saved cloud title preference is
+    // present.
+    if (isLocalModelSelection(resolvedChatModel)) return resolvedChatModel;
+    const override = resolveModel(titleOverride, "");
+    if (override) return override;
 
     switch (providerForModel(resolvedChatModel)) {
         case "claude":
@@ -221,4 +225,13 @@ export function titleModelForChat(
         case "openai-compatible":
             return resolvedChatModel;
     }
+}
+
+export function isLocalModelSelection(model: string): boolean {
+    const resolved = resolveModel(model, "");
+    if (!resolved) return false;
+    return (
+        providerForModel(resolved) === "ollama" ||
+        getConfiguredModel(resolved)?.location === "local"
+    );
 }

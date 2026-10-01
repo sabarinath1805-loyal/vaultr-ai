@@ -14,6 +14,11 @@ import type { Db } from "../../lib/supabase";
 import { ollamaAuthHeaders as authHeaders } from "../../lib/llm/providers";
 import { isSupportedOpenCodeGoModel } from "../../lib/llm/models";
 import { configuredEndpointSummaries } from "../../lib/llm/registry";
+import { guardedOutboundFetch } from "../../lib/outboundHttp";
+import {
+    configuredLoopbackModelOrigins,
+    configuredPrivateEndpointOrigins,
+} from "../../lib/llm/providerOrigins";
 import { getUserApiKeys } from "../user/user.service";
 
 export type CatalogPricing = {
@@ -77,16 +82,27 @@ function missingApiKey(detail: string): CatalogFailure {
 }
 
 async function upstreamFailure(
-    provider: string,
+    _provider: string,
     response: Response,
 ): Promise<CatalogFailure> {
-    const detail = await response.text().catch(() => "");
+    await response.body?.cancel().catch(() => undefined);
     return {
         ok: false,
         kind: "upstream",
-        error: new Error(
-            `${provider} model catalog request failed (${response.status})${detail ? `: ${detail}` : ""}`,
-        ),
+        error: new Error("Provider model catalog request failed."),
+    };
+}
+
+function catalogFetchPolicy(local = false) {
+    return {
+        allowedPrivateOrigins: configuredPrivateEndpointOrigins(),
+        allowedLoopbackOrigins: local ? configuredLoopbackModelOrigins() : [],
+        connectTimeoutMs: 10_000,
+        headersTimeoutMs: 15_000,
+        idleTimeoutMs: 20_000,
+        totalTimeoutMs: 30_000,
+        maxResponseBytes: 4 * 1024 * 1024,
+        followRedirects: false,
     };
 }
 
@@ -99,7 +115,11 @@ export async function listOllamaModels(): Promise<LocalModel[]> {
         process.env.OLLAMA_BASE_URL?.trim() || "http://localhost:11434/v1"
     ).replace(/\/$/, "");
     try {
-        const r = await fetch(`${base}/models`, { headers: authHeaders() });
+        const r = await guardedOutboundFetch(
+            `${base}/models`,
+            { headers: authHeaders(), redirect: "error" },
+            catalogFetchPolicy(true),
+        );
         if (!r.ok) return [];
         const data = (await r.json()) as { data?: { id: string }[] };
         return (data.data ?? []).map((m) => ({
@@ -157,9 +177,10 @@ export async function listOpenRouterModels(
             process.env.OPENROUTER_BASE_URL?.trim() ||
             "https://openrouter.ai/api/v1"
         ).replace(/\/+$/, "");
-        const response = await fetch(
+        const response = await guardedOutboundFetch(
             `${baseUrl}/models?output_modalities=text&supported_parameters=tools&sort=most-popular&limit=1000`,
             { headers: { Authorization: `Bearer ${key}` } },
+            catalogFetchPolicy(),
         );
         if (!response.ok) return await upstreamFailure("OpenRouter", response);
 
@@ -217,7 +238,11 @@ export async function listVercelModels(
             process.env.VERCEL_AI_GATEWAY_BASE_URL?.trim() ||
             "https://ai-gateway.vercel.sh/v1"
         ).replace(/\/+$/, "");
-        const response = await fetch(`${baseUrl}/models`);
+        const response = await guardedOutboundFetch(
+            `${baseUrl}/models`,
+            {},
+            catalogFetchPolicy(),
+        );
         if (!response.ok) {
             return await upstreamFailure("Vercel AI Gateway", response);
         }
@@ -314,9 +339,9 @@ export async function listOpenCodeGoModels(
             process.env.OPENCODE_GO_BASE_URL?.trim() ||
             "https://opencode.ai/zen/go/v1"
         ).replace(/\/+$/, "");
-        const response = await fetch(`${baseUrl}/models`, {
+        const response = await guardedOutboundFetch(`${baseUrl}/models`, {
             headers: { Authorization: `Bearer ${key}` },
-        });
+        }, catalogFetchPolicy());
         if (!response.ok) return await upstreamFailure("OpenCode Go", response);
 
         const payload = (await response.json()) as {

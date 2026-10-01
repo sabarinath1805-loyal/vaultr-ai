@@ -125,6 +125,9 @@ describe("user API key precedence", () => {
         };
 
         await saveUserApiKey("user-1", "openai", "personal-key", db as never);
+        expect(savedRow).toMatchObject({
+            endpoint_origin: "https://api.openai.com",
+        });
 
         await expect(getUserApiKeys("user-1", db as never)).resolves.toMatchObject({
             openai: "personal-key",
@@ -137,6 +140,41 @@ describe("user API key precedence", () => {
         });
 
         delete process.env.OPENAI_API_KEY;
+        delete process.env.USER_API_KEYS_ENCRYPTION_SECRET;
+    });
+
+    it("does not reuse a saved router key after its configured host changes", async () => {
+        process.env.USER_API_KEYS_ENCRYPTION_SECRET = "test-secret";
+        delete process.env.OPENROUTER_BASE_URL;
+        let savedRow: Record<string, unknown> | null = null;
+        const db = {
+            from: () => ({
+                upsert: async (row: Record<string, unknown>) => {
+                    savedRow = { ...row, provider: "openrouter" };
+                    return { error: null };
+                },
+                select: () => ({
+                    eq: async () => ({
+                        data: savedRow ? [savedRow] : [],
+                        error: null,
+                    }),
+                }),
+            }),
+        };
+
+        await saveUserApiKey("user-1", "openrouter", "router-key", db as never);
+        process.env.OPENROUTER_BASE_URL = "https://attacker.example/api/v1";
+
+        await expect(getUserApiKeys("user-1", db as never)).resolves.not.toHaveProperty(
+            "openrouter",
+            "router-key",
+        );
+        await expect(getUserApiKeyStatus("user-1", db as never)).resolves.toMatchObject({
+            openrouter: false,
+            sources: { openrouter: null },
+        });
+
+        delete process.env.OPENROUTER_BASE_URL;
         delete process.env.USER_API_KEYS_ENCRYPTION_SECRET;
     });
 });

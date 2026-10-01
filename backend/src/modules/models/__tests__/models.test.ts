@@ -2,8 +2,9 @@ import express from "express";
 import { afterEach, beforeEach, describe, expect, it, vi, beforeAll, afterAll } from "vitest";
 
 import { createSupertestClient } from "../../../__tests__/helpers/supertestClient";
-const { getUserApiKeys } = vi.hoisted(() => ({
+const { getUserApiKeys, guardedOutboundFetchMock } = vi.hoisted(() => ({
     getUserApiKeys: vi.fn(),
+    guardedOutboundFetchMock: vi.fn(),
 }));
 
 vi.mock("../../../middleware/auth", () => ({
@@ -24,9 +25,13 @@ vi.mock("../../../lib/supabase", () => ({
 vi.mock("../../user/user.apiKeyStore", () => ({
     getUserApiKeys: (...args: unknown[]) => getUserApiKeys(...args),
 }));
+vi.mock("../../../lib/outboundHttp", () => ({
+    guardedOutboundFetch: (...args: unknown[]) => guardedOutboundFetchMock(...args),
+}));
 
 import { modelsRouter } from "../models.routes";
 import { resetModelRegistryCache } from "../../../lib/llm/registry";
+import { guardedOutboundFetch } from "../../../lib/outboundHttp";
 
 
 import {
@@ -40,6 +45,12 @@ beforeAll(sharedHttpClient.start);
 afterAll(sharedHttpClient.close);
 
 app.use("/models", modelsRouter);
+
+beforeEach(() => {
+    guardedOutboundFetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) =>
+        globalThis.fetch(input, init),
+    );
+});
 
 describe("GET /models/configured", () => {
     const originalConfig = process.env.MIKE_MODEL_CONFIG_JSON;
@@ -59,7 +70,7 @@ describe("GET /models/configured", () => {
                     id: "cloud-user-key",
                     provider: "openai-compatible",
                     location: "cloud",
-                    baseUrl: "https://models.example.test/v1",
+                    baseUrl: "https://api.openai.com/v1",
                     apiKeyProvider: "openai",
                 },
                 {
@@ -311,6 +322,7 @@ describe("GET /models/vercel", () => {
         ]);
         expect(fetch).toHaveBeenCalledWith(
             "https://ai-gateway.vercel.sh/v1/models",
+            {},
         );
     });
 });

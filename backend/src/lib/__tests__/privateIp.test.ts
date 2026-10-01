@@ -1,7 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { isBlockedIp, isPrivateIpv4, isPrivateIpv6 } from "../privateIp";
+import {
+    isAllowlistablePrivateIp,
+    isBlockedIp,
+    isLoopbackIp,
+    isPrivateIpv4,
+    isPrivateIpv6,
+} from "../privateIp";
 
 describe("private/reserved IP classification", () => {
+    it("marks Azure's platform virtual IP as unsafe", () => {
+        expect(isBlockedIp("168.63.129.16")).toBe(true);
+    });
+
+    it.each(["127.0.0.1", "127.255.255.254", "::1"])(
+        "recognizes loopback %s",
+        (ip) => expect(isLoopbackIp(ip)).toBe(true),
+    );
+
+    it.each(["10.1.2.3", "172.20.1.1", "192.168.1.9", "fd12::1"])(
+        "marks RFC1918 or ULA %s as allowlistable private",
+        (ip) => expect(isAllowlistablePrivateIp(ip)).toBe(true),
+    );
+
+    it.each(["169.254.169.254", "100.100.100.200", "::ffff:10.0.0.1"])(
+        "keeps special or mapped address %s outside the private allowlist",
+        (ip) => expect(isAllowlistablePrivateIp(ip)).toBe(false),
+    );
     it.each([
         "0.0.0.0",
         "10.0.0.1",

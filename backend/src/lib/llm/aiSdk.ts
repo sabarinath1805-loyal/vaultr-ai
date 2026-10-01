@@ -12,6 +12,11 @@ import type {
 } from "./types";
 import { toProviderStreamError } from "./providerErrors";
 import { createRawLlmStreamRecorder, logRawLlmStream } from "./rawStreamLog";
+import { guardedOutboundFetch } from "../outboundHttp";
+import {
+  configuredLoopbackModelOrigins,
+  configuredPrivateEndpointOrigins,
+} from "./providerOrigins";
 
 const MAX_OUTPUT_TOKENS = 16_384;
 
@@ -55,7 +60,30 @@ export async function aiSdkFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
-  const response = await fetch(input, init);
+  const response = await guardedOutboundFetch(input, {
+    ...init,
+    redirect: "error",
+  }, {
+    allowedPrivateOrigins: configuredPrivateEndpointOrigins(),
+    allowedLoopbackOrigins: configuredLoopbackModelOrigins(),
+    connectTimeoutMs: 10_000,
+    headersTimeoutMs: 20_000,
+    idleTimeoutMs: 120_000,
+    totalTimeoutMs: 15 * 60_000,
+    maxResponseBytes: 32 * 1024 * 1024,
+    followRedirects: false,
+  });
+  if (!response.ok) {
+    const status = response.status;
+    await response.body?.cancel().catch(() => undefined);
+    return new Response(
+      JSON.stringify({ error: { message: "Provider request failed." } }),
+      {
+        status,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      },
+    );
+  }
   if (
     !response.body ||
     !response.headers.get("content-type")?.includes("text/event-stream")

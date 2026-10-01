@@ -41,6 +41,12 @@ describe("titleModelForChat", () => {
             "claude-haiku-4-5",
         );
     });
+
+    it("keeps automatic local titles on the selected local model", () => {
+        expect(titleModelForChat("ollama/qwen3.6", "gemini-3.5-flash-lite")).toBe(
+            "ollama/qwen3.6",
+        );
+    });
 });
 
 describe("normalizeOptionalModelPreference", () => {
@@ -150,7 +156,7 @@ describe("configured model selection", () => {
                     id: "user-key-compatible",
                     provider: "openai-compatible",
                     location: "cloud",
-                    baseUrl: "https://models.example.test/v1",
+                    baseUrl: "https://api.openai.com/v1",
                     apiKeyProvider: "openai",
                 },
             ],

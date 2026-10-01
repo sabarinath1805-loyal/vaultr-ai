@@ -42,6 +42,16 @@ describe("memory curator model selection", () => {
     ).toBe("gpt-5.6-sol");
   });
 
+  it("keeps local-model memory curation on the local chat endpoint", () => {
+    expect(
+      memoryCuratorModelForChat({
+        chatModel: "ollama/qwen3.6",
+        memoryCuratorModel: "gpt-5.6-luna",
+        environmentOverride: "claude-haiku-4-5",
+      }),
+    ).toBe("ollama/qwen3.6");
+  });
+
   it("ignores a preferred model the actor holds no key for", () => {
     // A stale preference or a deployment-wide override for another provider
     // must not fail every curator run for this user; the verified chat

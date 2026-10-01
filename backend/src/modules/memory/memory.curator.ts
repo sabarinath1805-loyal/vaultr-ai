@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { checkProjectAccess, ensureChatAccess, ensureReviewAccess, projectHasSharedAudience } from "../../lib/access";
 import { hasDirectContentGrants } from "../../lib/contentAccess";
 import { streamChatWithTools, type OpenAIToolSchema, type UserApiKeys } from "../../lib/llm";
-import { hasApiKeyForModel, resolveEffectiveChatModel } from "../../lib/modelSelection";
+import { hasApiKeyForModel, isLocalModelSelection, resolveEffectiveChatModel } from "../../lib/modelSelection";
 import { resolveModel } from "../../lib/llm/models";
 import { can } from "../../lib/permissions";
 // The user module's facade is the one door to per-user model settings. A
@@ -103,6 +103,9 @@ export function memoryCuratorModelForChat(args: {
    */
   apiKeys?: UserApiKeys;
 }): string {
+  if (isLocalModelSelection(args.chatModel)) {
+    return resolveModel(args.chatModel, "") ?? args.chatModel;
+  }
   const preferred =
     args.environmentOverride?.trim() ||
     args.memoryCuratorModel ||

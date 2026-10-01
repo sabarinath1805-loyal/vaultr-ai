@@ -625,6 +625,17 @@ describe("startUserMcpConnectorOAuth", () => {
         await expect(callbackProvider.clientInformation()).resolves.toEqual({
             client_id: "dcr-client-id",
         });
+
+        const changedHostProvider = new DbMcpOAuthProvider(
+            db,
+            { ...connector, server_url: "https://new-mcp.example.com/mcp" },
+            "user-1",
+            "initiate",
+            "https://app.test/callback",
+            "state-token",
+        );
+        await expect(changedHostProvider.clientInformation()).resolves.toBeUndefined();
+        await expect(changedHostProvider.tokens()).resolves.toBeUndefined();
     });
 
     it("does not touch stored tokens when the connector is already authorized", async () => {

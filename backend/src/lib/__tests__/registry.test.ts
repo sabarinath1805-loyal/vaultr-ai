@@ -178,10 +178,23 @@ describe("apiKeyForConfiguredModel", () => {
         expect(apiKeyForConfiguredModel(CLOUD_DEEPSEEK)).toBe("from-env");
     });
 
-    it("reads the user's key when the model names a provider slot", () => {
+    it("does not send a provider key to a different configured endpoint", () => {
         expect(
             apiKeyForConfiguredModel(
                 { ...CLOUD_DEEPSEEK, apiKeyProvider: "openai" },
+                { openai: "user-key" },
+            ),
+        ).toBeNull();
+    });
+
+    it("permits a provider key only when the configured host matches", () => {
+        expect(
+            apiKeyForConfiguredModel(
+                {
+                    ...CLOUD_DEEPSEEK,
+                    baseUrl: "https://api.openai.com/v1",
+                    apiKeyProvider: "openai",
+                },
                 { openai: "user-key" },
             ),
         ).toBe("user-key");

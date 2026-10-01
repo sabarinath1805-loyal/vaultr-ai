@@ -4,6 +4,7 @@ import type {
   Provider,
   UserApiKeys,
 } from "./types";
+import { normalizedOrigin, userApiKeyOrigin } from "./providerOrigins";
 
 // Deployment-declared models. The static catalog in models.ts covers the
 // hosted providers Mike ships with; this registry is how an operator adds a
@@ -122,6 +123,15 @@ export function apiKeyForConfiguredModel(
 ): string | null {
   if (model.apiKey?.trim()) return model.apiKey.trim();
   if (model.apiKeyProvider) {
+    // User-entered provider credentials are scoped to that provider's
+    // configured origin. A deployment-declared compatible endpoint may use a
+    // user's key only when its authority is exactly the expected provider.
+    if (
+      normalizedOrigin(model.baseUrl) !==
+      userApiKeyOrigin(model.apiKeyProvider)
+    ) {
+      return null;
+    }
     const userKey = apiKeys?.[model.apiKeyProvider];
     if (typeof userKey === "string" && userKey.trim()) return userKey.trim();
   }

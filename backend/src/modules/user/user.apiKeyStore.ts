@@ -3,15 +3,12 @@ import { createServerSupabase } from "../../lib/supabase";
 import type { Db } from "../../lib/supabase";
 import { logError } from "../../lib/log";
 import type { UserApiKeys } from "../../lib/llm";
+import {
+    userApiKeyOrigin,
+    type UserApiKeyProvider,
+} from "../../lib/llm/providerOrigins";
 
-export type ApiKeyProvider =
-    | "claude"
-    | "gemini"
-    | "openai"
-    | "openrouter"
-    | "vercel"
-    | "opencode-go"
-    | "courtlistener";
+export type ApiKeyProvider = UserApiKeyProvider;
 export type ApiKeySource = "user" | "env" | null;
 export type ApiKeyStatus = Record<ApiKeyProvider, boolean> & {
     sources: Record<ApiKeyProvider, ApiKeySource>;
@@ -22,6 +19,7 @@ type EncryptedKeyRow = {
     encrypted_key: string;
     iv: string;
     auth_tag: string;
+    endpoint_origin: string;
 };
 
 const PROVIDERS: ApiKeyProvider[] = [
@@ -86,7 +84,9 @@ function encryptionKey(): Buffer {
     return derived;
 }
 
-function encrypt(value: string): Omit<EncryptedKeyRow, "provider"> {
+function encrypt(
+    value: string,
+): Omit<EncryptedKeyRow, "provider" | "endpoint_origin"> {
     const iv = crypto.randomBytes(12);
     const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey(), iv);
     const encrypted = Buffer.concat([
@@ -162,13 +162,13 @@ export async function getUserApiKeyStatus(
 
     const { data, error } = await db
         .from("user_api_keys")
-        .select("provider")
+        .select("provider, endpoint_origin")
         .eq("user_id", userId);
     if (error) throw error;
 
     for (const row of data ?? []) {
         const provider = normalizeApiKeyProvider(String(row.provider));
-        if (provider) {
+        if (provider && row.endpoint_origin === userApiKeyOrigin(provider)) {
             status[provider] = true;
             status.sources[provider] = "user";
         }
@@ -193,13 +193,13 @@ export async function getUserApiKeys(
 
     const { data, error } = await db
         .from("user_api_keys")
-        .select("provider, encrypted_key, iv, auth_tag")
+        .select("provider, encrypted_key, iv, auth_tag, endpoint_origin")
         .eq("user_id", userId);
     if (error) throw error;
 
     for (const row of (data ?? []) as EncryptedKeyRow[]) {
         const provider = normalizeApiKeyProvider(row.provider);
-        if (!provider) continue;
+        if (!provider || row.endpoint_origin !== userApiKeyOrigin(provider)) continue;
         const userKey = decrypt(row)?.trim() || null;
         if (userKey) apiKeys[provider] = userKey;
     }
@@ -228,6 +228,7 @@ export async function saveUserApiKey(
         {
             user_id: userId,
             provider,
+            endpoint_origin: userApiKeyOrigin(provider),
             ...encrypt(normalized),
             updated_at: new Date().toISOString(),
         },

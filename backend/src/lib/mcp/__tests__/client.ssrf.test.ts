@@ -22,6 +22,7 @@ import {
     guardedFetch,
     mcpOAuthCallbackUrl,
     validateRemoteMcpUrl,
+    validateCustomHeaders,
 } from "../client";
 
 const originalNodeEnv = process.env.NODE_ENV;
@@ -118,14 +119,36 @@ describe("validateRemoteMcpUrl", () => {
         ).rejects.toThrow(/blocked network address/);
     });
 
-    it("accepts a public host and strips credentials/hash", async () => {
+    it("accepts a public host and removes a non-authoritative fragment", async () => {
         resolvesTo("93.184.216.34");
         const out = await validateRemoteMcpUrl(
-            "https://user:secret@public.example.com/path?q=1#frag",
+            "https://public.example.com/path?q=1#frag",
         );
         expect(out).toBe("https://public.example.com/path?q=1");
-        expect(out).not.toContain("secret");
         expect(out).not.toContain("frag");
+    });
+
+    it("rejects userinfo instead of silently normalizing credential-bearing URLs", async () => {
+        await expect(
+            validateRemoteMcpUrl("https://user:secret@public.example.com/mcp"),
+        ).rejects.toThrow(/userinfo|credentials/i);
+        expect(lookupMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        "https://2130706433/",
+        "https://0x7f000001/",
+        "https://0177.0.0.1/",
+    ])("rejects a non-decimal loopback spelling: %s", async (url) => {
+        await expect(validateRemoteMcpUrl(url)).rejects.toThrow(
+            /blocked network address/,
+        );
+    });
+
+    it("rejects control characters in custom header values", () => {
+        expect(() =>
+            validateCustomHeaders({ "X-Test": "safe\r\nX-Injected: yes" }),
+        ).toThrow(/control characters/i);
     });
 });
 
