@@ -13,6 +13,7 @@ const validProduction = {
   SUPABASE_PUBLISHABLE_KEY: "publishable-key-that-is-not-a-demo-value",
   SUPABASE_SECRET_KEY: "service-role-key-that-is-not-a-demo-value",
   JWT_SECRET: "j".repeat(48),
+  DOWNLOAD_SIGNING_SECRET: "d".repeat(48),
   USER_API_KEYS_ENCRYPTION_SECRET: "u".repeat(48),
   MCP_CONNECTORS_ENCRYPTION_SECRET: "m".repeat(48),
   AUTH_HANDOFF_ENCRYPTION_SECRET: "h".repeat(48),
@@ -114,6 +115,7 @@ describe("production configuration guard", () => {
     ["SUPABASE_SECRET_KEY", "service-role-key-that-is-not-a-demo-value", "must differ"],
     ["SUPABASE_PUBLISHABLE_KEY", undefined, "required"],
     ["JWT_SECRET", "short", "at least 32 characters"],
+    ["DOWNLOAD_SIGNING_SECRET", "short", "at least 32 characters"],
     ["USER_API_KEYS_ENCRYPTION_SECRET", "short", "at least 32 characters"],
     ["TRUST_PROXY_HOPS", undefined, "must be explicitly set"],
     ["TRUST_PROXY_HOPS", "one", "non-negative integer"],
@@ -129,6 +131,8 @@ describe("production configuration guard", () => {
     ["LOG_RAW_LLM_STREAM", "true", "must be disabled"],
     ["SENTRY_ENABLE_TEST_ROUTE", "true", "must be disabled"],
     ["MODEL_PRIVATE_ENDPOINT_ALLOWLIST", "http://169.254.169.254", "link-local"],
+    ["WORD_ADDIN_CSP_CONNECT_ORIGINS", "https://*.ingest.sentry.io", "exact HTTPS origins"],
+    ["WORD_ADDIN_CSP_CONNECT_ORIGINS", "http://telemetry.example.test", "must use https"],
   ] as const)("rejects unsafe %s (%s)", (name, value, issue) => {
     const env = {
       ...validProduction,
@@ -145,6 +149,15 @@ describe("production configuration guard", () => {
       evaluateProductionConfiguration({
         ...validProduction,
         TRUST_PROXY_HOPS: "0",
+      }).errors,
+    ).toEqual([]);
+  });
+
+  it("accepts exact HTTPS origins for optional Word add-in telemetry", () => {
+    expect(
+      evaluateProductionConfiguration({
+        ...validProduction,
+        WORD_ADDIN_CSP_CONNECT_ORIGINS: "https://o123.ingest.sentry.io",
       }).errors,
     ).toEqual([]);
   });

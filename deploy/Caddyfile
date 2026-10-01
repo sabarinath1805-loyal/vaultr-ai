@@ -1,0 +1,139 @@
+{
+	admin off
+	email {$TLS_EMAIL}
+	servers {
+		timeouts {
+			read_header 10s
+			read_body 2m
+			read_body_idle 30s
+			write 16m
+			write_idle 3m
+			idle 2m
+		}
+	}
+}
+
+# The proxy is the only public listener. Automatic certificate issuance and
+# renewal use the configured hostnames and TLS_EMAIL.
+http://{$APP_HOST}, http://{$WORD_HOST} {
+	redir https://{host}{uri} 308
+}
+
+{$APP_HOST} {
+	# Plain header setters replace any upstream value instead of appending a
+	# second copy. The frontend owns its per-response nonce CSP, so this proxy
+	# deliberately leaves Content-Security-Policy unchanged.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		X-Frame-Options DENY
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+
+	@upload path /api/upload-sessions /api/upload-sessions/*
+	handle @upload {
+		request_body {
+			max_size 256KiB
+		}
+		reverse_proxy frontend:3000 {
+			header_up X-Forwarded-For {remote_host}
+			header_up -X-Real-IP
+			header_up -Forwarded
+			header_up -CF-Connecting-IP
+			header_up -True-Client-IP
+			flush_interval -1
+			stream_timeout 16m
+		}
+	}
+
+	@chat path /api/chat* /api/word-chat* /api/projects/*/chat* /api/tabular-review/*/chat* /api/tabular-review/*/generate*
+	handle @chat {
+		request_body {
+			max_size 2MiB
+		}
+		reverse_proxy frontend:3000 {
+			header_up X-Forwarded-For {remote_host}
+			header_up -X-Real-IP
+			header_up -Forwarded
+			header_up -CF-Connecting-IP
+			header_up -True-Client-IP
+			flush_interval -1
+			stream_timeout 16m
+		}
+	}
+
+	handle {
+		request_body {
+			max_size 1MiB
+		}
+		reverse_proxy frontend:3000 {
+			header_up X-Forwarded-For {remote_host}
+			header_up -X-Real-IP
+			header_up -Forwarded
+			header_up -CF-Connecting-IP
+			header_up -True-Client-IP
+			flush_interval -1
+			stream_timeout 16m
+		}
+	}
+}
+
+{$WORD_HOST} {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		# Office hosts must frame this add-in; CSP frame-ancestors below is the
+		# framing policy because X-Frame-Options cannot express this allowlist.
+		Content-Security-Policy "default-src 'self'; base-uri 'none'; object-src 'none'; script-src 'self' https://appsforoffice.microsoft.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://appsforoffice.microsoft.com {$WORD_ADDIN_CSP_CONNECT_ORIGINS}; frame-ancestors https://*.office.com https://*.office365.com https://*.microsoft365.com https://*.officeapps.live.com"
+	}
+
+	@upload path /api/upload-sessions /api/upload-sessions/*
+	handle @upload {
+		request_body {
+			max_size 256KiB
+		}
+		reverse_proxy word-addin:3200 {
+			header_up X-Forwarded-For {remote_host}
+			header_up -X-Real-IP
+			header_up -Forwarded
+			header_up -CF-Connecting-IP
+			header_up -True-Client-IP
+			flush_interval -1
+			stream_timeout 16m
+		}
+	}
+
+	@chat path /api/chat* /api/word-chat* /api/projects/*/chat* /api/tabular-review/*/chat* /api/tabular-review/*/generate*
+	handle @chat {
+		request_body {
+			max_size 2MiB
+		}
+		reverse_proxy word-addin:3200 {
+			header_up X-Forwarded-For {remote_host}
+			header_up -X-Real-IP
+			header_up -Forwarded
+			header_up -CF-Connecting-IP
+			header_up -True-Client-IP
+			flush_interval -1
+			stream_timeout 16m
+		}
+	}
+
+	handle {
+		request_body {
+			max_size 1MiB
+		}
+		reverse_proxy word-addin:3200 {
+			header_up X-Forwarded-For {remote_host}
+			header_up -X-Real-IP
+			header_up -Forwarded
+			header_up -CF-Connecting-IP
+			header_up -True-Client-IP
+			flush_interval -1
+			stream_timeout 16m
+		}
+	}
+}

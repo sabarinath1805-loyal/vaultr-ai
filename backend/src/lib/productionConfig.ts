@@ -166,6 +166,23 @@ function checkCorsOrigins(env: Environment, errors: string[]) {
   }
 }
 
+function checkWordCspConnectOrigins(value: string, errors: string[]) {
+  for (const origin of value.split(/\s+/).map((item) => item.trim()).filter(Boolean)) {
+    if (origin.includes("*")) {
+      errors.push("WORD_ADDIN_CSP_CONNECT_ORIGINS must contain exact HTTPS origins, not wildcards");
+      continue;
+    }
+    const url = parseHttpUrl("WORD_ADDIN_CSP_CONNECT_ORIGINS", origin, errors);
+    if (!url) continue;
+    if (url.protocol !== "https:") {
+      errors.push("WORD_ADDIN_CSP_CONNECT_ORIGINS entries must use https");
+    }
+    if (url.pathname !== "/" || url.search || url.hash) {
+      errors.push("WORD_ADDIN_CSP_CONNECT_ORIGINS entries must be origins without a path");
+    }
+  }
+}
+
 function checkRateLimitConfiguration(env: Environment, errors: string[]) {
   for (const [name, raw] of Object.entries(env)) {
     if (!name.startsWith("RATE_LIMIT_") || raw === undefined || !raw.trim()) continue;
@@ -217,6 +234,7 @@ function evaluate(env: Environment): ConfigurationReport {
     errors.push("SUPABASE_SECRET_KEY must differ from the publishable/anon key");
   }
   requireMinimum("JWT_SECRET", 32);
+  requireMinimum("DOWNLOAD_SIGNING_SECRET", 32);
   requireMinimum("USER_API_KEYS_ENCRYPTION_SECRET", 32);
   const mcpEncryptionSecret = configured(env.MCP_CONNECTORS_ENCRYPTION_SECRET);
   if (mcpEncryptionSecret) {
@@ -263,6 +281,10 @@ function evaluate(env: Environment): ConfigurationReport {
   const wordAddinUrl = configured(env.WORD_ADDIN_URL);
   if (wordAddinUrl) requireSecureUrl("WORD_ADDIN_URL", wordAddinUrl, errors);
   checkCorsOrigins(env, errors);
+  checkWordCspConnectOrigins(
+    configured(env.WORD_ADDIN_CSP_CONNECT_ORIGINS),
+    errors,
+  );
 
   const storageEndpoint = requireValue("R2_ENDPOINT_URL");
   if (storageEndpoint) requireSecureUrl("R2_ENDPOINT_URL", storageEndpoint, errors);

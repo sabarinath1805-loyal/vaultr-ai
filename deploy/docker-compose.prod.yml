@@ -1,0 +1,267 @@
+name: vaultr-production
+
+# Production example for the documented managed-Supabase + S3-compatible
+# deployment. The database and object store are managed endpoints, not local
+# containers. Only backend/worker receive provider egress; they use TLS.
+services:
+  caddy:
+    image: caddy:2.11.4-alpine
+    user: caddy
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_HOST: ${APP_HOST:?Set APP_HOST in .env.production}
+      WORD_HOST: ${WORD_HOST:?Set WORD_HOST in .env.production}
+      TLS_EMAIL: ${TLS_EMAIL:?Set TLS_EMAIL in .env.production}
+      WORD_ADDIN_CSP_CONNECT_ORIGINS: ${WORD_ADDIN_CSP_CONNECT_ORIGINS:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge]
+    restart: unless-stopped
+    pids_limit: 128
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
+    healthcheck:
+      test: [CMD, caddy, validate, --config, /etc/caddy/Caddyfile, --adapter, caddyfile]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  frontend:
+    image: vaultr-frontend:${RELEASE_TAG:?Set RELEASE_TAG in .env.production}
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        GIT_SHA: ${RELEASE_SHA:-}
+        NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+        NEXT_PUBLIC_SENTRY_DISABLED: ${NEXT_PUBLIC_SENTRY_DISABLED:-}
+        NEXT_PUBLIC_SENTRY_INSTALL: ${NEXT_PUBLIC_SENTRY_INSTALL:-}
+        NEXT_PUBLIC_SENTRY_ENVIRONMENT: ${NEXT_PUBLIC_SENTRY_ENVIRONMENT:-}
+        NEXT_PUBLIC_SENTRY_RELEASE: ${NEXT_PUBLIC_SENTRY_RELEASE:-}
+    user: node
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      API_BASE_URL: http://backend:3001
+      R2_PUBLIC_ENDPOINT_URL: ${R2_PUBLIC_ENDPOINT_URL:-}
+      SENTRY_DSN: ${FRONTEND_SENTRY_DSN:-}
+      SENTRY_DISABLED: ${SENTRY_DISABLED:-false}
+      SENTRY_INSTALL: ${SENTRY_INSTALL:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-}
+    networks: [edge, app_internal]
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    pids_limit: 256
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=1777
+      - /app/.next/cache:rw,noexec,nosuid,size=256m,uid=1000,gid=1000,mode=0750
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 1536M
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  backend:
+    image: vaultr-backend:${RELEASE_TAG:?Set RELEASE_TAG in .env.production}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        GIT_SHA: ${RELEASE_SHA:-}
+    env_file:
+      - .env.production
+    user: node
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: [node, --enable-source-maps, dist/index.js]
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      WORKERS_MODE: none
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:?Set TRUST_PROXY_HOPS=1 for the bundled proxy path}
+      API_REPLICAS: ${API_REPLICAS:-1}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set a URL-safe REDIS_PASSWORD}@redis:6379/0
+      DEBUG_LLM_TOOL_CALLS: ${DEBUG_LLM_TOOL_CALLS:-0}
+      LOG_RAW_LLM_STREAM: ${LOG_RAW_LLM_STREAM:-false}
+      SENTRY_DEBUG: ${SENTRY_DEBUG:-false}
+      SENTRY_ENABLE_TEST_ROUTE: ${SENTRY_ENABLE_TEST_ROUTE:-false}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    expose: ["3001"]
+    networks: [app_internal, provider_egress]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    pids_limit: 512
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=1g,uid=1000,gid=1000,mode=1777
+      - /home/node/.config:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=0750
+      - /home/node/.cache:rw,noexec,nosuid,size=128m,uid=1000,gid=1000,mode=0750
+    deploy:
+      replicas: ${API_REPLICAS:-1}
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 3G
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  worker:
+    image: vaultr-backend:${RELEASE_TAG:?Set RELEASE_TAG in .env.production}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        GIT_SHA: ${RELEASE_SHA:-}
+    env_file:
+      - .env.production
+    user: node
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: [node, --enable-source-maps, dist/worker.js]
+    environment:
+      NODE_ENV: production
+      WORKERS_MODE: none
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set a URL-safe REDIS_PASSWORD}@redis:6379/0
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    networks: [app_internal, provider_egress]
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    pids_limit: 512
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=1g,uid=1000,gid=1000,mode=1777
+      - /home/node/.config:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=0750
+      - /home/node/.cache:rw,noexec,nosuid,size=128m,uid=1000,gid=1000,mode=0750
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 3G
+    healthcheck:
+      test: [CMD, node, -e, "require('node:fs').accessSync('/proc/1/cmdline')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  word-addin:
+    image: vaultr-word-addin:${RELEASE_TAG:?Set RELEASE_TAG in .env.production}
+    build:
+      context: .
+      dockerfile: word-addin/Dockerfile
+      args:
+        REACT_APP_WEB_APP_URL: ${FRONTEND_URL:?Set FRONTEND_URL in .env.production}
+        WORD_ADDIN_PUBLIC_URL: ${WORD_ADDIN_URL:?Set WORD_ADDIN_URL in .env.production}
+        GIT_SHA: ${RELEASE_SHA:-}
+        REACT_APP_SENTRY_DSN: ${WORD_ADDIN_SENTRY_DSN:-}
+        REACT_APP_SENTRY_DISABLED: ${REACT_APP_SENTRY_DISABLED:-}
+        REACT_APP_SENTRY_INSTALL: ${REACT_APP_SENTRY_INSTALL:-}
+        REACT_APP_SENTRY_ENVIRONMENT: ${REACT_APP_SENTRY_ENVIRONMENT:-}
+        REACT_APP_SENTRY_RELEASE: ${REACT_APP_SENTRY_RELEASE:-}
+    user: node
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      NODE_ENV: production
+      PORT: "3200"
+      WORD_ADDIN_BACKEND_ORIGIN: http://backend:3001
+    networks: [edge, app_internal]
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    pids_limit: 128
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,uid=1000,gid=1000,mode=1777
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3200/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  redis:
+    image: redis:7-alpine
+    user: redis
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    command: [redis-server, --appendonly, "yes", --appendfsync, everysec, --requirepass, "${REDIS_PASSWORD:?Set a URL-safe REDIS_PASSWORD}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set a URL-safe REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    networks: [app_internal]
+    restart: unless-stopped
+    pids_limit: 128
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 1G
+    healthcheck:
+      test: [CMD-SHELL, "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -qx PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+networks:
+  edge:
+    driver: bridge
+  app_internal:
+    driver: bridge
+    internal: true
+  provider_egress:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
+  redis_data:
