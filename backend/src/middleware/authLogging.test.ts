@@ -1,6 +1,6 @@
 import express from "express";
-import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withSupertestClient } from "../__tests__/helpers/supertestClient";
 
 const mocks = vi.hoisted(() => ({
   devLog: vi.fn(),
@@ -32,7 +32,9 @@ describe("OAuth callback auth diagnostics", () => {
     });
     const path = "/user/integrations/google-drive/oauth/finish";
     app.get(path, requireMfaIfEnrolled, (_req, res) => res.json({ ok: true }));
-    const response = await request(app).get(`${path}?code=private-oauth-code&state=private-oauth-state`);
+    const response = await withSupertestClient(app, (client) =>
+      client.request().get(`${path}?code=private-oauth-code&state=private-oauth-state`),
+    );
     expect(response.status).toBe(nextLevel === "aal2" ? 403 : 200);
     expect(mocks.devLog).toHaveBeenCalled();
     for (const [, diagnostic] of mocks.devLog.mock.calls) {

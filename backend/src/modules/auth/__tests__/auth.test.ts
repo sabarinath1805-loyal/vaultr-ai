@@ -1,7 +1,7 @@
 import express from "express";
-import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll, afterAll } from "vitest";
 
+import { createSupertestClient } from "../../../__tests__/helpers/supertestClient";
 const {
   authClient,
   createRequestSupabase,
@@ -67,7 +67,13 @@ vi.mock("../../../middleware/auth", () => ({
 
 import { authRouter } from "../auth.routes";
 
+
+
 const app = express();
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 app.use(express.json());
 app.use("/auth", authRouter);
 
@@ -96,7 +102,7 @@ describe("auth routes", () => {
   });
 
   it("rejects an auth mutation from an untrusted origin", async () => {
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .post("/auth/login")
       .set("Origin", "https://attacker.example")
       .send({ email: "lawyer@example.test", password: "correct horse" });
@@ -112,7 +118,7 @@ describe("auth routes", () => {
       error: null,
     });
 
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .post("/auth/login")
       .set("Origin", origin)
       .send({ email: user.email, password: "correct horse" });
@@ -136,7 +142,7 @@ describe("auth routes", () => {
       error: null,
     });
 
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .post("/auth/oauth")
       .set("Origin", origin)
       .send({
@@ -157,7 +163,7 @@ describe("auth routes", () => {
   });
 
   it("disables SSO initiation by default", async () => {
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .post("/auth/oauth")
       .set("Origin", origin)
       .send({ provider: "sso", email: "lawyer@example.com" });
@@ -172,7 +178,7 @@ describe("auth routes", () => {
       data: { url: "https://idp.example/saml" },
       error: null,
     });
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .post("/auth/oauth")
       .set("Origin", origin)
       .send({
@@ -193,7 +199,7 @@ describe("auth routes", () => {
 
   it("requires a company email and permits an allowed email domain", async () => {
     process.env.SSO_ENABLED = "true";
-    const missing = await request(app)
+    const missing = await sharedHttpClient.request()
       .post("/auth/oauth")
       .set("Origin", origin)
       .send({ provider: "sso" });
@@ -203,7 +209,7 @@ describe("auth routes", () => {
       data: { url: "https://idp.example/saml" },
       error: null,
     });
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .post("/auth/oauth")
       .set("Origin", origin)
       .send({
@@ -235,7 +241,7 @@ describe("auth routes", () => {
     `user@${"a".repeat(64)}.com`,
   ])("rejects invalid SSO email %s", async (email) => {
     process.env.SSO_ENABLED = "true";
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .post("/auth/oauth")
       .set("Origin", origin)
       .send({ provider: "sso", email });
@@ -251,13 +257,13 @@ describe("auth routes", () => {
       "lawyer@sub.example.com",
       "lawyer@example.com.evil.test",
     ]) {
-      const response = await request(app)
+      const response = await sharedHttpClient.request()
         .post("/auth/oauth")
         .set("Origin", origin)
         .send({ provider: "sso", email });
       expect(response.body.code).toBe("sso_domain_not_allowed");
     }
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .post("/auth/oauth")
       .set("Origin", "https://attacker.example")
       .send({ provider: "sso", email: "lawyer@example.com" });
@@ -268,7 +274,7 @@ describe("auth routes", () => {
   it("fails closed for an invalid domain allowlist", async () => {
     process.env.SSO_ENABLED = "true";
     process.env.SSO_ALLOWED_DOMAINS = "example.com,,other.example";
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .post("/auth/oauth")
       .set("Origin", origin)
       .send({ provider: "sso", email: "lawyer@example.com" });
@@ -285,7 +291,7 @@ describe("auth routes", () => {
         data: null,
         error: { status, message: "private provider diagnostics" },
       });
-      const response = await request(app)
+      const response = await sharedHttpClient.request()
         .post("/auth/oauth")
         .set("Origin", origin)
         .send({ provider: "sso", email: "lawyer@example.com" });
@@ -304,7 +310,7 @@ describe("auth routes", () => {
       error: null,
     });
     for (let i = 0; i < 2; i++) {
-      const response = await request(app)
+      const response = await sharedHttpClient.request()
         .post("/auth/oauth")
         .set("Origin", origin)
         .send({ provider: "sso", email: "lawyer@example.com" });
@@ -318,7 +324,7 @@ describe("auth routes", () => {
       new Error("account not found"),
     );
 
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .post("/auth/password-reset")
       .set("Origin", origin)
       .send({ email: "unknown@example.test" });
@@ -335,11 +341,11 @@ describe("auth routes", () => {
           : { data: {}, error: new Error("account not found") },
     );
 
-    const known = await request(app)
+    const known = await sharedHttpClient.request()
       .post("/auth/password-reset")
       .set("Origin", origin)
       .send({ email: "known@example.test" });
-    const unknown = await request(app)
+    const unknown = await sharedHttpClient.request()
       .post("/auth/password-reset")
       .set("Origin", origin)
       .send({ email: "unknown@example.test" });
@@ -356,7 +362,7 @@ describe("auth routes", () => {
       new Error("upstream unavailable"),
     );
 
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .post("/auth/logout")
       .set("Origin", origin)
       .send({ scope: "local" });
@@ -384,7 +390,7 @@ describe("auth routes", () => {
         error: null,
       });
 
-      const response = await request(app)
+      const response = await sharedHttpClient.request()
         .post(path)
         .set("Origin", origin)
         .send({
@@ -415,7 +421,7 @@ describe("auth routes", () => {
     });
     issueAuthHandoff.mockResolvedValue("a".repeat(43));
 
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .post("/auth/exchange")
       .set("Origin", wordOrigin)
       .send({ code: "oauth-code", handoffRequestId: "request-id-123456" });
@@ -445,7 +451,7 @@ describe("auth routes", () => {
       error: null,
     });
 
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .post("/auth/handoff")
       .set("Origin", wordOrigin)
       .send({ ticket: "b".repeat(43), requestId: "request-id-123456" });

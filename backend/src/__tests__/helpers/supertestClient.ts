@@ -2,10 +2,11 @@ import { createServer, type RequestListener, type Server } from "node:http";
 import request from "supertest";
 
 /**
- * Give one integration-test file one ephemeral HTTP listener. Supertest's
- * `request(app)` creates and closes a server for every request; under a busy
- * parallel suite, high-volume route tests can otherwise churn hundreds of
- * listeners and sockets while unrelated files are also making requests.
+ * Give one integration-test file one IPv4 loopback listener. Supertest's
+ * `request(app)` creates a wildcard listener but connects to 127.0.0.1; on
+ * hosts that permit separate IPv4 and IPv6 wildcard binds on the same port,
+ * that can route a test request to an unrelated local listener. Binding this
+ * server explicitly to loopback also avoids per-request listener churn.
  */
 export function createSupertestClient(app: RequestListener) {
   let server: Server | null = null;
@@ -41,4 +42,17 @@ export function createSupertestClient(app: RequestListener) {
       return request(server);
     },
   };
+}
+
+export async function withSupertestClient<T>(
+  app: RequestListener,
+  run: (client: ReturnType<typeof createSupertestClient>) => Promise<T>,
+): Promise<T> {
+  const client = createSupertestClient(app);
+  await client.start();
+  try {
+    return await run(client);
+  } finally {
+    await client.close();
+  }
 }

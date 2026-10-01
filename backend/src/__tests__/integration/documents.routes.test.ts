@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import request from "supertest";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 
 // ---------------------------------------------------------------------------
 // DELETE /single-documents/:documentId — the container's rule, not `user_id`.
@@ -158,6 +158,10 @@ vi.mock("../../lib/dbq/enqueue", () => ({
 
 import { app } from "../../app";
 
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 const AUTH = ["Authorization", "Bearer test"] as const;
 const DOC = "11111111-1111-4111-8111-111111111111";
 
@@ -201,7 +205,7 @@ describe("DELETE /single-documents/:documentId", () => {
             },
         ];
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete(`/single-documents/${DOC}`)
             .set(...AUTH);
 
@@ -212,7 +216,7 @@ describe("DELETE /single-documents/:documentId", () => {
     it("deletes the caller's own document", async () => {
         ensureDocAccess.mockResolvedValue(access("owner", true));
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete(`/single-documents/${DOC}`)
             .set(...AUTH);
 
@@ -220,7 +224,7 @@ describe("DELETE /single-documents/:documentId", () => {
     });
 
     it("refuses a live colleague's document with 403, not a fake 404", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete(`/single-documents/${DOC}`)
             .set(...AUTH);
 
@@ -234,7 +238,7 @@ describe("DELETE /single-documents/:documentId", () => {
     it("keeps 404 for a document the caller cannot see at all", async () => {
         ensureDocAccess.mockResolvedValue({ ok: false });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete(`/single-documents/${DOC}`)
             .set(...AUTH);
 
@@ -260,7 +264,7 @@ describe("DELETE /single-documents/:documentId", () => {
         ];
         ensureDocAccess.mockResolvedValue(access("owner", false));
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete(`/single-documents/${DOC}`)
             .set(...AUTH);
 
@@ -275,7 +279,7 @@ describe("DELETE /single-documents/:documentId", () => {
         // upload this file may not delete it.
         ensureDocAccess.mockResolvedValue(access("editor", false));
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete(`/single-documents/${DOC}`)
             .set(...AUTH);
 
@@ -298,7 +302,7 @@ describe("DELETE /single-documents/:documentId", () => {
         ];
         ensureDocAccess.mockResolvedValue(access("editor", false));
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete(`/single-documents/${DOC}`)
             .set(...AUTH);
 
@@ -364,7 +368,7 @@ describe("DELETE /single-documents/:documentId/versions/:versionId", () => {
     });
 
     it("refuses a non-creator editor with 403 and a reason", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete(`/single-documents/${DOC}/versions/${V2}`)
             .set(...AUTH);
 
@@ -381,7 +385,7 @@ describe("DELETE /single-documents/:documentId/versions/:versionId", () => {
         // A non-member must not learn that the document exists.
         ensureDocAccess.mockResolvedValue({ ok: false });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete(`/single-documents/${DOC}/versions/${V2}`)
             .set(...AUTH);
 
@@ -394,7 +398,7 @@ describe("DELETE /single-documents/:documentId/versions/:versionId", () => {
         ensureDocAccess.mockResolvedValue(access("editor", true));
         rows.documents[0].user_id = "u1";
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete(`/single-documents/${DOC}/versions/${V2}`)
             .set(...AUTH);
 
@@ -439,7 +443,7 @@ describe("POST /single-documents/:documentId/versions/from-document", () => {
     it("refuses a viewer who can open the document with 403 and a reason", async () => {
         ensureDocAccess.mockResolvedValue(access("viewer", false));
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post(`/single-documents/${DOC}/versions/from-document`)
             .set(...AUTH)
             .send({ source_document_id: SOURCE });
@@ -453,7 +457,7 @@ describe("POST /single-documents/:documentId/versions/from-document", () => {
     it("keeps 404 for a caller with no verdict at all", async () => {
         ensureDocAccess.mockResolvedValue({ ok: false });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post(`/single-documents/${DOC}/versions/from-document`)
             .set(...AUTH)
             .send({ source_document_id: SOURCE });

@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import request from "supertest";
+import { beforeEach, describe, expect, it, vi, beforeAll, afterAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 
 type QueryError = { message: string } | null;
 type QueryResult = { data: unknown; error: QueryError };
@@ -173,6 +173,10 @@ vi.mock("../../middleware/auth", () => ({
 
 import { app } from "../../app";
 
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 const DOCUMENT_ID = "123e4567-e89b-42d3-a456-426614174000";
 const CHAT_ID = "41eb8f61-d7af-454e-b680-cd28bd65c742";
 const MESSAGE_ID = "efca16cc-daca-40ef-83cb-1e974582691c";
@@ -201,7 +205,7 @@ describe("Word chat history routes", () => {
   it("returns an empty list when the document row genuinely does not exist", async () => {
     dbState.document = { data: null, error: null };
 
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .get(`/word-chat?document_id=${DOCUMENT_ID}`)
       .set(...AUTH);
 
@@ -218,7 +222,7 @@ describe("Word chat history routes", () => {
       error: { message: "word_documents is unavailable" },
     };
 
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .get(`/word-chat?document_id=${DOCUMENT_ID}`)
       .set(...AUTH);
 
@@ -235,7 +239,7 @@ describe("Word chat history routes", () => {
       error: { message: "word_chats is unavailable" },
     };
 
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .get(`/word-chat?document_id=${DOCUMENT_ID}`)
       .set(...AUTH);
 
@@ -249,7 +253,7 @@ describe("Word chat history routes", () => {
       error: { message: "document lookup failed" },
     };
 
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .get(`/word-chat/${CHAT_ID}?document_id=${DOCUMENT_ID}`)
       .set(...AUTH);
 
@@ -263,7 +267,7 @@ describe("Word chat history routes", () => {
       error: { message: "chat lookup failed" },
     };
 
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .get(`/word-chat/${CHAT_ID}?document_id=${DOCUMENT_ID}`)
       .set(...AUTH);
 
@@ -282,7 +286,7 @@ describe("Word chat history routes", () => {
   });
 
   it("keeps a genuinely missing scoped chat as 404", async () => {
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .get(`/word-chat/${CHAT_ID}?document_id=${DOCUMENT_ID}`)
       .set(...AUTH);
 
@@ -323,7 +327,7 @@ describe("Word chat history routes", () => {
       error: null,
     };
 
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .get(`/word-chat/${CHAT_ID}?document_id=${DOCUMENT_ID}`)
       .set(...AUTH);
 
@@ -332,7 +336,7 @@ describe("Word chat history routes", () => {
   });
 
   it("returns 404 before querying Postgres for a malformed chat id", async () => {
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .get(`/word-chat/not-a-uuid?document_id=${DOCUMENT_ID}`)
       .set(...AUTH);
 
@@ -362,7 +366,7 @@ describe("Word chat history routes", () => {
       },
       error: null,
     };
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .put(
         `/word-chat/messages/${MESSAGE_ID}/edits/0?document_id=${DOCUMENT_ID}`,
       )
@@ -383,7 +387,7 @@ describe("Word chat history routes", () => {
   });
 
   it("rejects malformed normalized edits before querying their message", async () => {
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .put(
         `/word-chat/messages/${MESSAGE_ID}/edits/0?document_id=${DOCUMENT_ID}`,
       )
@@ -395,7 +399,7 @@ describe("Word chat history routes", () => {
   });
 
   it("rejects normalized edit anchors longer than the Word protocol limit", async () => {
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .put(
         `/word-chat/messages/${MESSAGE_ID}/edits/0?document_id=${DOCUMENT_ID}`,
       )
@@ -420,7 +424,7 @@ describe("Word chat history routes", () => {
       error: null,
     };
 
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .patch(
         `/word-chat/messages/${MESSAGE_ID}/edits/0?document_id=${DOCUMENT_ID}`,
       )
@@ -436,7 +440,7 @@ describe("POST /word-chat/tool-result", () => {
   const TOOL_CALL_ID = "7f0e19cf-9be0-4b53-a1c4-2f2ffb92e611";
 
   it("rejects a malformed tool_call_id", async () => {
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .post("/word-chat/tool-result")
       .set(...AUTH)
       .send({ tool_call_id: "not-a-uuid", result: {} });
@@ -446,7 +450,7 @@ describe("POST /word-chat/tool-result", () => {
   });
 
   it("answers 404 for an unknown or expired call id", async () => {
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .post("/word-chat/tool-result")
       .set(...AUTH)
       .send({ tool_call_id: TOOL_CALL_ID, result: {} });
@@ -463,7 +467,7 @@ describe("POST /word-chat/tool-result", () => {
       userId: "u1",
     });
 
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .post("/word-chat/tool-result")
       .set(...AUTH)
       .send({
@@ -487,7 +491,7 @@ describe("POST /word-chat/tool-result", () => {
 
     // The mocked auth middleware authenticates as u1; the pending call
     // belongs to someone-else, so delivery must be refused as if unknown.
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .post("/word-chat/tool-result")
       .set(...AUTH)
       .send({ tool_call_id: TOOL_CALL_ID, result: {} });
@@ -511,7 +515,7 @@ describe("POST /word-chat — local storage", () => {
   });
 
   it("does not schedule memory consolidation without a durable transcript", async () => {
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .post("/word-chat")
       .set(...AUTH)
       .send({
@@ -535,7 +539,7 @@ describe("POST /word-chat — local storage", () => {
       error: null,
     };
 
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .post("/word-chat")
       .set(...AUTH)
       .send({
@@ -600,7 +604,7 @@ describe("POST /word-chat — local storage", () => {
     runLLMStream.mockRejectedValueOnce(new Error("provider failed"));
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .post("/word-chat")
       .set(...AUTH)
       .send({

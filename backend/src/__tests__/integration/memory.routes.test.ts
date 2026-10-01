@@ -1,6 +1,5 @@
 import express from "express";
-import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   checkProjectAccess: vi.fn(),
@@ -46,6 +45,7 @@ vi.mock("../../lib/memory/files", async (importOriginal) => {
 
 import { projectMemoryRouter, userMemoryRouter } from "../../modules/memory/memory.routes";
 import { MemoryRevisionConflictError } from "../../lib/memory/files";
+import { createSupertestClient } from "../helpers/supertestClient";
 
 const file = {
   id: "00000000-0000-4000-8000-000000000010",
@@ -83,6 +83,10 @@ function testApp() {
   return app;
 }
 
+const sharedHttpClient = createSupertestClient(testApp());
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.ensureMemoryFile.mockResolvedValue(file);
@@ -105,7 +109,7 @@ beforeEach(() => {
 
 describe("scoped memory routes", () => {
   it("returns the locked snake_case current representation", async () => {
-    const response = await request(testApp()).get("/user/memory").expect(200);
+    const response = await sharedHttpClient.request().get("/user/memory").expect(200);
     expect(response.body).toEqual(current);
     expect(response.headers["cache-control"]).toBe("private, no-store");
     expect(mocks.ensureMemoryFile).toHaveBeenCalledWith(
@@ -119,7 +123,7 @@ describe("scoped memory routes", () => {
     mocks.writeMemoryFile.mockRejectedValueOnce(
       new MemoryRevisionConflictError("changed"),
     );
-    const response = await request(testApp())
+    const response = await sharedHttpClient.request()
       .put("/user/memory")
       .send({ content: "next", expected_revision: 2 })
       .expect(409);
@@ -130,7 +134,7 @@ describe("scoped memory routes", () => {
   });
 
   it("destructively disables user memory but user DELETE preserves the enable state", async () => {
-    await request(testApp())
+    await sharedHttpClient.request()
       .patch("/user/memory/settings")
       .send({ enabled: false })
       .expect(200);
@@ -138,7 +142,7 @@ describe("scoped memory routes", () => {
       expect.objectContaining({ enabled: false }),
     );
 
-    await request(testApp()).delete("/user/memory").expect(200);
+    await sharedHttpClient.request().delete("/user/memory").expect(200);
     expect(mocks.wipeMemoryFile).toHaveBeenLastCalledWith(
       expect.objectContaining({ enabled: null }),
     );
@@ -151,12 +155,12 @@ describe("scoped memory routes", () => {
     });
     const base = "/projects/00000000-0000-4000-8000-000000000020/memory";
 
-    await request(testApp()).get(base).expect(200);
-    await request(testApp())
+    await sharedHttpClient.request().get(base).expect(200);
+    await sharedHttpClient.request()
       .put(base)
       .send({ content: "next", expected_revision: 2 })
       .expect(403);
-    await request(testApp())
+    await sharedHttpClient.request()
       .patch(`${base}/settings`)
       .send({ enabled: false })
       .expect(403);
@@ -171,7 +175,7 @@ describe("scoped memory routes", () => {
     });
     const projectId = "00000000-0000-4000-8000-000000000020";
 
-    await request(testApp()).get(`/projects/${projectId}/memory`).expect(200);
+    await sharedHttpClient.request().get(`/projects/${projectId}/memory`).expect(200);
 
     // Project memory is on by default: a project whose row predates the
     // memory tables must not be created opted out by the first read.
@@ -190,7 +194,7 @@ describe("scoped memory routes", () => {
   it("does not expose a standalone project-memory wipe route", async () => {
     const base = "/projects/00000000-0000-4000-8000-000000000020/memory";
 
-    await request(testApp()).delete(base).expect(404);
+    await sharedHttpClient.request().delete(base).expect(404);
 
     expect(mocks.checkProjectAccess).not.toHaveBeenCalled();
     expect(mocks.wipeMemoryFile).not.toHaveBeenCalled();
@@ -200,12 +204,12 @@ describe("scoped memory routes", () => {
     mocks.checkProjectAccess.mockResolvedValue({ ok: false, status: 404 });
     const base = "/projects/00000000-0000-4000-8000-000000000020/memory";
 
-    await request(testApp()).get(base).expect(404);
-    await request(testApp())
+    await sharedHttpClient.request().get(base).expect(404);
+    await sharedHttpClient.request()
       .put(base)
       .send({ content: "next", expected_revision: 2 })
       .expect(404);
-    await request(testApp())
+    await sharedHttpClient.request()
       .patch(`${base}/settings`)
       .send({ enabled: false })
       .expect(404);
@@ -220,11 +224,11 @@ describe("scoped memory routes", () => {
     });
     const base = "/projects/00000000-0000-4000-8000-000000000020/memory";
 
-    await request(testApp())
+    await sharedHttpClient.request()
       .put(base)
       .send({ content: "next", expected_revision: 2 })
       .expect(200);
-    await request(testApp())
+    await sharedHttpClient.request()
       .patch(`${base}/settings`)
       .send({ enabled: false })
       .expect(403);
@@ -242,7 +246,7 @@ describe("scoped memory routes", () => {
   it("allows project owners to disable shared memory", async () => {
     const base = "/projects/00000000-0000-4000-8000-000000000020/memory";
 
-    await request(testApp())
+    await sharedHttpClient.request()
       .patch(`${base}/settings`)
       .send({ enabled: false })
       .expect(200);

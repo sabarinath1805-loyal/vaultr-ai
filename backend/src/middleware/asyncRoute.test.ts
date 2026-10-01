@@ -7,7 +7,7 @@ vi.mock("../lib/observability/sentry", async (importOriginal) => ({
 }));
 
 import express from "express";
-import request from "supertest";
+import { withSupertestClient } from "../__tests__/helpers/supertestClient";
 import { asyncRoute, routerErrorHandler } from "./asyncRoute";
 
 describe("routerErrorHandler", () => {
@@ -32,7 +32,9 @@ describe("routerErrorHandler", () => {
     router.use(routerErrorHandler("[test-router]"));
     app.use("/api", router);
 
-    const res = await request(app).get("/api/boom");
+    const res = await withSupertestClient(app, (client) =>
+      client.request().get("/api/boom"),
+    );
 
     expect(res.status).toBe(500);
     expect(res.body.code).toBe("internal_error");
@@ -63,7 +65,9 @@ describe("routerErrorHandler", () => {
     router.use(routerErrorHandler("[test-router]"));
     app.use("/api", router);
 
-    await request(app).get("/api/stream").catch(() => undefined);
+    await withSupertestClient(app, (client) =>
+      client.request().get("/api/stream").catch(() => undefined),
+    );
     expect(reportError).not.toHaveBeenCalled();
   });
 });

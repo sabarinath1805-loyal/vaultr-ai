@@ -1,5 +1,5 @@
-import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
-import request from "supertest";
+import { beforeEach, afterEach, describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 import type { Response } from "express";
 const mocks = vi.hoisted(() => ({
   auth: true,
@@ -44,6 +44,11 @@ vi.mock("../../lib/integrations/googleWorkspace", () => ({
   isGoogleWorkspaceTool: () => false,
 }));
 import { app } from "../../app";
+
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 const action = "12345678-1234-1234-1234-123456789abc";
 beforeEach(() => {
   vi.clearAllMocks();
@@ -65,7 +70,7 @@ describe("Google Workspace routes", () => {
       });
       expect(
         (
-          await request(app)
+          await sharedHttpClient.request()
             .post(`/user/integrations/${provider}/oauth/start`)
             .send({})
         ).status,
@@ -84,7 +89,7 @@ describe("Google Workspace routes", () => {
     async (provider) => {
       vi.stubEnv("FRONTEND_URL", "https://app.mike.test");
       mocks.auth = false;
-      const relay = await request(app)
+      const relay = await sharedHttpClient.request()
         .get(`/user/integrations/${provider}/oauth/callback`)
         .query({ state: "s", code: "c", redirect_uri: "https://attacker.test" })
         .set("Host", "attacker.test");
@@ -95,10 +100,10 @@ describe("Google Workspace routes", () => {
       expect(relay.headers["cache-control"]).toBe("no-store");
       expect(relay.headers["referrer-policy"]).toBe("no-referrer");
       const finish = `/user/integrations/${provider}/oauth/finish?state=s&code=c`;
-      expect((await request(app).get(finish)).status).toBe(401);
+      expect((await sharedHttpClient.request().get(finish)).status).toBe(401);
       mocks.auth = true;
       mocks.mfa = false;
-      expect((await request(app).get(finish)).status).toBe(403);
+      expect((await sharedHttpClient.request().get(finish)).status).toBe(403);
       expect(mocks.complete).not.toHaveBeenCalled();
     },
   );
@@ -106,7 +111,7 @@ describe("Google Workspace routes", () => {
     "binds %s completion to the authenticated user",
     async (provider) => {
       mocks.complete.mockResolvedValue(undefined);
-      const res = await request(app).get(
+      const res = await sharedHttpClient.request().get(
         `/user/integrations/${provider}/oauth/finish?state=s&code=c`,
       );
       expect(res.status).toBe(200);
@@ -122,14 +127,14 @@ describe("Google Workspace routes", () => {
   it("only enables writes through an explicit boolean", async () => {
     expect(
       (
-        await request(app)
+        await sharedHttpClient.request()
           .post("/user/integrations/gmail/oauth/start")
           .send({ write: "true" })
       ).status,
     ).toBe(400);
     expect(mocks.start).not.toHaveBeenCalled();
     mocks.start.mockResolvedValue({ authorizationUrl: "url" });
-    await request(app)
+    await sharedHttpClient.request()
       .post("/user/integrations/gmail/oauth/start")
       .send({ write: true });
     expect(mocks.start.mock.calls[0].at(-1)).toBe(true);
@@ -141,17 +146,17 @@ describe("Google Workspace routes", () => {
     `/user/google-actions/${action}/reject`,
   ])("requires authentication and MFA for %s", async (path) => {
     mocks.auth = false;
-    expect((await request(app).post(path)).status).toBe(401);
+    expect((await sharedHttpClient.request().post(path)).status).toBe(401);
     mocks.auth = true;
     mocks.mfa = false;
-    expect((await request(app).post(path)).status).toBe(403);
+    expect((await sharedHttpClient.request().post(path)).status).toBe(403);
     expect(mocks.approve).not.toHaveBeenCalled();
     expect(mocks.start).not.toHaveBeenCalled();
   });
   it("does not let approval replace the reviewed payload or user ID", async () => {
     expect(
       (
-        await request(app)
+        await sharedHttpClient.request()
           .post(`/user/google-actions/${action}/approve`)
           .send({ userId: "other", payload: { to: "attacker" } })
       ).status,
@@ -159,30 +164,30 @@ describe("Google Workspace routes", () => {
     expect(mocks.approve).not.toHaveBeenCalled();
     mocks.approve.mockResolvedValue({ status: "succeeded" });
     expect(
-      (await request(app).post(`/user/google-actions/${action}/approve`))
+      (await sharedHttpClient.request().post(`/user/google-actions/${action}/approve`))
         .status,
     ).toBe(200);
     expect(mocks.approve).toHaveBeenCalledWith({}, "owner", action);
   });
   it("lists only through the authenticated owner service and rejects malformed IDs", async () => {
     mocks.list.mockResolvedValue([]);
-    expect((await request(app).get("/user/google-actions")).body).toEqual({
+    expect((await sharedHttpClient.request().get("/user/google-actions")).body).toEqual({
       actions: [],
     });
     expect(mocks.list).toHaveBeenCalledWith({}, "owner");
     expect(
-      (await request(app).post("/user/google-actions/not-an-id/approve"))
+      (await sharedHttpClient.request().post("/user/google-actions/not-an-id/approve"))
         .status,
     ).toBe(400);
   });
   it("sanitizes provider and database errors", async () => {
     mocks.start.mockRejectedValue(new Error("secret token and stack"));
-    const start = await request(app).post(
+    const start = await sharedHttpClient.request().post(
       "/user/integrations/gmail/oauth/start",
     );
     expect(JSON.stringify(start.body)).not.toContain("secret");
     mocks.complete.mockRejectedValue(new Error("secret token"));
-    const callback = await request(app).get(
+    const callback = await sharedHttpClient.request().get(
       "/user/integrations/gmail/oauth/finish?state=s&code=c",
     );
     expect(callback.status).toBe(400);

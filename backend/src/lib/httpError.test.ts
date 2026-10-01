@@ -7,7 +7,7 @@ vi.mock("./observability/sentry", async (importOriginal) => ({
 }));
 
 import express from "express";
-import request from "supertest";
+import { withSupertestClient } from "../__tests__/helpers/supertestClient";
 import { sendInternalError } from "./httpError";
 
 function appThatFails(error: unknown, status?: number) {
@@ -39,7 +39,9 @@ describe("sendInternalError", () => {
       .mockImplementation(() => {});
     const failure = new Error("relation private_table does not exist");
 
-    const res = await request(appThatFails(failure)).get("/projects/p-123?code=private-oauth-code&state=private-oauth-state");
+    const res = await withSupertestClient(appThatFails(failure), (client) =>
+      client.request().get("/projects/p-123?code=private-oauth-code&state=private-oauth-state"),
+    );
 
     expect(res.status).toBe(500);
     expect(res.body).toEqual({
@@ -77,7 +79,9 @@ describe("sendInternalError", () => {
       hint: null,
     };
 
-    const res = await request(appThatFails(pg)).get("/projects/p-1");
+    const res = await withSupertestClient(appThatFails(pg), (client) =>
+      client.request().get("/projects/p-1"),
+    );
 
     expect(res.status).toBe(500);
     const reported = (reportError.mock.calls[0] as unknown[])[0] as Error;
@@ -91,8 +95,9 @@ describe("sendInternalError", () => {
   it("passes a non-default status through to the report", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const res = await request(appThatFails(new Error("upstream"), 503)).get(
-      "/projects/p-1",
+    const res = await withSupertestClient(
+      appThatFails(new Error("upstream"), 503),
+      (client) => client.request().get("/projects/p-1"),
     );
 
     expect(res.status).toBe(503);

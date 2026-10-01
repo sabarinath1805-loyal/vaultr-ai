@@ -1,7 +1,7 @@
 import express from "express";
 import { Readable } from "node:stream";
-import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll, afterAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 
 const mocks = vi.hoisted(() => ({
   createFileReadStream: vi.fn(),
@@ -66,7 +66,13 @@ vi.mock("../../lib/storage", async (importOriginal) => ({
 
 import { documentsRouter } from "../../modules/documents/documents.routes";
 
+
+
 const app = express();
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 app.use("/single-documents", documentsRouter);
 
 describe("GET /single-documents/:documentId/file", () => {
@@ -96,7 +102,7 @@ describe("GET /single-documents/:documentId/file", () => {
   });
 
   it("streams the requested version's source bytes with its actual file type", async () => {
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .get("/single-documents/document-1/file?version_id=version-2")
       .set("Authorization", "Bearer test");
 
@@ -126,7 +132,7 @@ describe("GET /single-documents/:documentId/file", () => {
   it("does not read storage when the caller cannot access the document", async () => {
     mocks.ensureDocAccess.mockResolvedValue({ ok: false });
 
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .get("/single-documents/document-1/file")
       .set("Authorization", "Bearer test");
 
@@ -141,7 +147,7 @@ describe("GET /single-documents/:documentId/file", () => {
   it("returns 404 without opening a stream when the source object is missing", async () => {
     mocks.headFile.mockResolvedValue(null);
 
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .get("/single-documents/document-1/file")
       .set("Authorization", "Bearer test");
 
@@ -152,7 +158,7 @@ describe("GET /single-documents/:documentId/file", () => {
   });
 
   it("does not retain the old format-specific route", async () => {
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .get("/single-documents/document-1/docx")
       .set("Authorization", "Bearer test");
 

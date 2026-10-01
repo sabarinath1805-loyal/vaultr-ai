@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
-import request from "supertest";
+import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 
 // requireAuth reads SUPABASE_URL / SUPABASE_SECRET_KEY from process.env at
 // request time (not import time), so setting them here is early enough even
@@ -40,9 +40,13 @@ vi.mock("@supabase/supabase-js", () => ({
 // vi.mock() call in source order.
 import { app } from "../../app";
 
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 describe("GET /health", () => {
     it("returns 200 with { ok: true }", async () => {
-        const res = await request(app).get("/health");
+        const res = await sharedHttpClient.request().get("/health");
         expect(res.status).toBe(200);
         expect(res.body).toEqual({ ok: true });
         expect(res.headers["x-request-id"]).toMatch(
@@ -53,13 +57,13 @@ describe("GET /health", () => {
 
 describe("requireAuth middleware", () => {
     it("rejects requests with no Authorization header (401)", async () => {
-        const res = await request(app).get("/chat");
+        const res = await sharedHttpClient.request().get("/chat");
         expect(res.status).toBe(401);
         expect(res.body).toHaveProperty("detail");
     });
 
     it("rejects requests with a non-Bearer Authorization header (401)", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .get("/chat")
             .set("Authorization", "Basic dXNlcjpwYXNz");
         expect(res.status).toBe(401);
@@ -68,7 +72,7 @@ describe("requireAuth middleware", () => {
     it("rejects requests with an invalid Bearer token (401)", async () => {
         // The mocked createClient().auth.getUser returns { user: null } for
         // any token — simulating an expired/invalid token.
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .get("/chat")
             .set("Authorization", "Bearer invalid-token");
         expect(res.status).toBe(401);
@@ -82,7 +86,7 @@ describe("GET /manifest-signing-key", () => {
     });
 
     it("returns null when the deployment does not sign manifests", async () => {
-        const res = await request(app).get("/manifest-signing-key");
+        const res = await sharedHttpClient.request().get("/manifest-signing-key");
         expect(res.status).toBe(200);
         expect(res.body).toBeNull();
     });
@@ -91,7 +95,7 @@ describe("GET /manifest-signing-key", () => {
         const seed = "7c".repeat(32);
         process.env.MANIFEST_SIGNING_KEY = seed;
 
-        const res = await request(app).get("/manifest-signing-key");
+        const res = await sharedHttpClient.request().get("/manifest-signing-key");
 
         expect(res.status).toBe(200);
         expect(res.body.algorithm).toBe("ed25519");
@@ -101,14 +105,14 @@ describe("GET /manifest-signing-key", () => {
     });
 
     it("is reachable without authentication", async () => {
-        const res = await request(app).get("/manifest-signing-key");
+        const res = await sharedHttpClient.request().get("/manifest-signing-key");
         expect(res.status).not.toBe(401);
     });
 
     it("returns 500 rather than a stack trace when the key is malformed", async () => {
         process.env.MANIFEST_SIGNING_KEY = "nonsense";
 
-        const res = await request(app).get("/manifest-signing-key");
+        const res = await sharedHttpClient.request().get("/manifest-signing-key");
 
         expect(res.status).toBe(500);
         expect(res.body).toMatchObject({
@@ -121,7 +125,7 @@ describe("GET /manifest-signing-key", () => {
 
 describe("404 handling", () => {
     it("returns 404 for unknown routes", async () => {
-        const res = await request(app).get("/this-route-does-not-exist");
+        const res = await sharedHttpClient.request().get("/this-route-does-not-exist");
         expect(res.status).toBe(404);
     });
 });

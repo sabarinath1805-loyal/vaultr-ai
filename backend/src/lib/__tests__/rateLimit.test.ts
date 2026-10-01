@@ -1,6 +1,6 @@
 import express from "express";
-import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
+import { withSupertestClient } from "../../__tests__/helpers/supertestClient";
 import rateLimit, { type Options, type Store } from "express-rate-limit";
 import {
   BoundedMemoryRateLimitStore,
@@ -196,11 +196,25 @@ describe("limiter configuration isolation", () => {
     const relaxedHeaders = { "X-Forwarded-For": "198.51.100.82" };
 
     try {
-      expect((await request(strict).get("/limited").set(strictHeaders)).status).toBe(204);
-      expect((await request(strict).get("/limited").set(strictHeaders)).status).toBe(429);
-      expect((await request(relaxed).get("/limited").set(relaxedHeaders)).status).toBe(204);
-      expect((await request(relaxed).get("/limited").set(relaxedHeaders)).status).toBe(204);
-      expect((await request(relaxed).get("/limited").set(relaxedHeaders)).status).toBe(429);
+      await withSupertestClient(strict, async (strictClient) => {
+        await withSupertestClient(relaxed, async (relaxedClient) => {
+          expect((await strictClient.request().get("/limited").set(strictHeaders)).status).toBe(204);
+          expect((await strictClient.request().get("/limited").set(strictHeaders)).status).toBe(429);
+          expect((await relaxedClient.request().get("/limited").set(relaxedHeaders)).status).toBe(204);
+          expect((await relaxedClient.request().get("/limited").set(relaxedHeaders)).status).toBe(204);
+          const relaxedLimit = await relaxedClient.request()
+            .get("/limited")
+            .set(relaxedHeaders);
+          expect(
+            relaxedLimit.status,
+            JSON.stringify({
+              status: relaxedLimit.status,
+              body: relaxedLimit.text,
+              headers: relaxedLimit.headers,
+            }),
+          ).toBe(429);
+        });
+      });
     } finally {
       if (original === undefined) delete process.env.RATE_LIMIT_CHAT_IP_MAX;
       else process.env.RATE_LIMIT_CHAT_IP_MAX = original;
@@ -223,18 +237,20 @@ describe("limiter configuration isolation", () => {
     );
 
     try {
-      const userHeaders = { "X-Test-User": "ws5-unit-abuser" };
-      expect((await request(app).post("/limited").set(userHeaders)).status).toBe(204);
-      expect((await request(app).post("/limited").set(userHeaders)).status).toBe(204);
-      const blocked = await request(app).post("/limited").set(userHeaders);
-      expect(blocked.status).toBe(429);
-      expect(blocked.headers["retry-after"]).toBeDefined();
-      expect(JSON.stringify(blocked.body)).not.toContain("ws5-unit-abuser");
+      await withSupertestClient(app, async (client) => {
+        const userHeaders = { "X-Test-User": "ws5-unit-abuser" };
+        expect((await client.request().post("/limited").set(userHeaders)).status).toBe(204);
+        expect((await client.request().post("/limited").set(userHeaders)).status).toBe(204);
+        const blocked = await client.request().post("/limited").set(userHeaders);
+        expect(blocked.status).toBe(429);
+        expect(blocked.headers["retry-after"]).toBeDefined();
+        expect(JSON.stringify(blocked.body)).not.toContain("ws5-unit-abuser");
 
-      const peer = await request(app)
-        .post("/limited")
-        .set({ "X-Test-User": "ws5-unit-peer" });
-      expect(peer.status).toBe(204);
+        const peer = await client.request()
+          .post("/limited")
+          .set({ "X-Test-User": "ws5-unit-peer" });
+        expect(peer.status).toBe(204);
+      });
     } finally {
       if (oldMax === undefined) delete process.env.RATE_LIMIT_CHAT_MAX;
       else process.env.RATE_LIMIT_CHAT_MAX = oldMax;
@@ -276,7 +292,9 @@ describe("rate-limit store error policy", () => {
   }
 
   it("returns a sanitized retryable 503 when a protected store fails", async () => {
-    const response = await request(requestApp(false)).get("/protected");
+    const response = await withSupertestClient(requestApp(false), (client) =>
+      client.request().get("/protected"),
+    );
     expect(response.status).toBe(503);
     expect(response.headers["retry-after"]).toBe("30");
     expect(response.body).toMatchObject({
@@ -285,13 +303,18 @@ describe("rate-limit store error policy", () => {
     });
     expect(JSON.stringify(response.body)).not.toMatch(/synthetic-key|policy-test/);
 
-    const routerResponse = await request(requestApp(false, true)).get("/protected");
+    const routerResponse = await withSupertestClient(
+      requestApp(false, true),
+      (client) => client.request().get("/protected"),
+    );
     expect(routerResponse.status).toBe(503);
     expect(routerResponse.headers["retry-after"]).toBe("30");
   });
 
   it("allows only configured low-risk IP backstops to fail open", async () => {
-    const response = await request(requestApp(true)).get("/protected");
+    const response = await withSupertestClient(requestApp(true), (client) =>
+      client.request().get("/protected"),
+    );
     expect(response.status).toBe(204);
     expect(rateLimitStoreErrorPolicy("general", "ip")).toBe("open");
     for (const [name, scope] of [
@@ -343,15 +366,19 @@ describe("rate-limit store error policy", () => {
     };
 
     const general = cappedApp("general:ip", true);
-    expect((await request(general).get("/limited").set("X-Synthetic-Key", "first-ip")).status).toBe(204);
-    expect((await request(general).get("/limited").set("X-Synthetic-Key", "second-ip")).status).toBe(204);
+    await withSupertestClient(general, async (client) => {
+      expect((await client.request().get("/limited").set("X-Synthetic-Key", "first-ip")).status).toBe(204);
+      expect((await client.request().get("/limited").set("X-Synthetic-Key", "second-ip")).status).toBe(204);
+    });
 
     const exportApp = cappedApp("export:user", false);
-    expect((await request(exportApp).get("/limited").set("X-Synthetic-Key", "first-user")).status).toBe(204);
-    const capped = await request(exportApp).get("/limited").set("X-Synthetic-Key", "second-user");
-    expect(capped.status).toBe(503);
-    expect(capped.headers["retry-after"]).toBe("30");
-    expect(capped.body.code).toBe("rate_limit_unavailable");
-    expect(JSON.stringify(capped.body)).not.toMatch(/first-user|second-user/);
+    await withSupertestClient(exportApp, async (client) => {
+      expect((await client.request().get("/limited").set("X-Synthetic-Key", "first-user")).status).toBe(204);
+      const capped = await client.request().get("/limited").set("X-Synthetic-Key", "second-user");
+      expect(capped.status).toBe(503);
+      expect(capped.headers["retry-after"]).toBe("30");
+      expect(capped.body.code).toBe("rate_limit_unavailable");
+      expect(JSON.stringify(capped.body)).not.toMatch(/first-user|second-user/);
+    });
   });
 });

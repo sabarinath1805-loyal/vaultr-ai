@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import request from "supertest";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 import {
     supabaseState,
     resetSupabaseState,
@@ -73,6 +73,10 @@ import crypto from "crypto";
 import { manifestPublicKey } from "../../lib/manifestSigning";
 import { createServerSupabase, type Db } from "../../lib/supabase";
 import { attachActiveVersionPaths } from "../../lib/documentVersions";
+
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
 
 const SIGNING_KEY = "3b".repeat(32);
 
@@ -167,7 +171,7 @@ describe("projects.routes", () => {
                     actual.attachActiveVersionPaths,
                 );
 
-                const res = await request(app)
+                const res = await sharedHttpClient.request()
                     .patch("/projects/p1/documents/doc-1")
                     .set(...AUTH)
                     .send({ filename: "Renamed document" });
@@ -197,7 +201,7 @@ describe("projects.routes", () => {
                 error: { message: "private database failure" },
             };
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .patch("/projects/p1/documents/doc-1")
                 .set(...AUTH)
                 .send({ filename: "Renamed.pdf" });
@@ -224,7 +228,7 @@ describe("projects.routes", () => {
                 error: null,
             };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/projects")
         .set(...AUTH);
 
@@ -259,7 +263,7 @@ describe("projects.routes", () => {
                 error: null,
             };
 
-            const res = await request(app).get("/projects").set(...AUTH);
+            const res = await sharedHttpClient.request().get("/projects").set(...AUTH);
 
             expect(res.status).toBe(200);
             expect(res.body).toEqual([
@@ -303,7 +307,7 @@ describe("projects.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get("/projects?include=documents")
                 .set(...AUTH);
 
@@ -318,7 +322,7 @@ describe("projects.routes", () => {
         it("returns 500 with detail when the RPC errors", async () => {
             supabaseState.rpc = { data: null, error: { message: "boom" } };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/projects")
         .set(...AUTH);
 
@@ -332,7 +336,7 @@ describe("projects.routes", () => {
             const captured = captureRpcArgs();
             supabaseState.rpc = { data: [], error: null };
 
-      await request(app)
+      await sharedHttpClient.request()
         .get("/projects")
         .set(...AUTH);
 
@@ -346,7 +350,7 @@ describe("projects.routes", () => {
             const captured = captureRpcArgs();
             supabaseState.rpc = { data: [], error: null };
 
-            await request(app)
+            await sharedHttpClient.request()
                 .get(
                     "/projects?limit=10&scope=mine&sort_key=name&sort_direction=asc" +
                         "&search=acme&practice=Litigation&owner_user_id=u2",
@@ -374,7 +378,7 @@ describe("projects.routes", () => {
         error: null,
       };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/projects?view=summary&limit=11&offset=10")
         .set(...AUTH);
 
@@ -392,7 +396,7 @@ describe("projects.routes", () => {
     });
 
     it("uses the projects collection for directory search", async () => {
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/projects?view=directory-search")
         .set(...AUTH);
 
@@ -401,7 +405,7 @@ describe("projects.routes", () => {
     });
 
     it("no longer exposes a separate project directory search route", async () => {
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/projects/directory/search?search=Agreement")
         .set(...AUTH);
 
@@ -505,7 +509,7 @@ describe("projects.routes", () => {
           }) as unknown as ReturnType<typeof createServerSupabase>,
       );
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/projects?view=directory-search&search=Matter")
         .set(...AUTH);
 
@@ -522,7 +526,7 @@ describe("projects.routes", () => {
           }) as unknown as ReturnType<typeof createServerSupabase>,
       );
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/projects?view=directory-search&search=Matter")
         .set(...AUTH);
 
@@ -542,7 +546,7 @@ describe("projects.routes", () => {
           }) as unknown as ReturnType<typeof createServerSupabase>,
       );
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/projects?view=directory-search&search=Matter")
         .set(...AUTH);
 
@@ -569,7 +573,7 @@ describe("projects.routes", () => {
                 return db as unknown as Db;
             });
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/projects/ids")
         .set(...AUTH);
 
@@ -582,7 +586,7 @@ describe("projects.routes", () => {
         it("returns 500 with detail when the RPC errors", async () => {
             supabaseState.rpc = { data: null, error: { message: "boom" } };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/projects/ids")
         .set(...AUTH);
 
@@ -604,7 +608,7 @@ describe("projects.routes", () => {
         error: null,
       };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/projects/filter-options")
         .set(...AUTH);
 
@@ -643,7 +647,7 @@ describe("projects.routes", () => {
         error: null,
       };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/library/templates/folders/nested")
         .set(...AUTH);
 
@@ -657,7 +661,7 @@ describe("projects.routes", () => {
     it("returns 404 for a Library folder outside the requested collection", async () => {
       supabaseState.tables.library_folders = { data: [], error: null };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/library/files/folders/missing")
         .set(...AUTH);
 
@@ -675,7 +679,7 @@ describe("projects.routes", () => {
         error: null,
       };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get(
           "/library/templates?view=search&limit=1&offset=2&search=Agreement" +
             "&file_type=docx&sort_key=name&sort_direction=asc",
@@ -707,7 +711,7 @@ describe("projects.routes", () => {
     });
 
     it("no longer exposes a separate Library search route", async () => {
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/library/templates/search?search=Agreement")
         .set(...AUTH);
 
@@ -721,7 +725,7 @@ describe("projects.routes", () => {
         error: null,
       };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/library/files/filter-options")
         .set(...AUTH);
 
@@ -748,7 +752,7 @@ describe("projects.routes", () => {
         error: null,
       };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .post("/projects/p1/folder-paths/resolve")
         .set(...AUTH)
         .send({
@@ -787,7 +791,7 @@ describe("projects.routes", () => {
         },
       });
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .post("/projects/p1/folder-paths/resolve")
         .set(...AUTH)
         .send({
@@ -823,7 +827,7 @@ describe("projects.routes", () => {
         error: null,
       };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .post("/projects/p1/folder-paths/resolve")
         .set(...AUTH)
         .send({ segments: ["NDAs"] });
@@ -849,7 +853,7 @@ describe("projects.routes", () => {
         error: null,
       };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .post("/library/files/folder-paths/resolve")
         .set(...AUTH)
         .send({ segments: ["NDAs"] });
@@ -878,7 +882,7 @@ describe("projects.routes", () => {
         .spyOn(console, "error")
         .mockImplementation(() => {});
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .post(path)
         .set(...AUTH)
         .send({ segments: ["NDAs"] });
@@ -897,7 +901,7 @@ describe("projects.routes", () => {
     it("rejects malformed path segments before calling the RPC", async () => {
       const captured = captureRpcArgs();
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .post("/library/files/folder-paths/resolve")
         .set(...AUTH)
         .send({ segments: ["NDAs", 42] });
@@ -911,7 +915,7 @@ describe("projects.routes", () => {
     // ── POST /projects (create) ───────────────────────────────────────────
     describe("POST /projects", () => {
         it("returns 400 when name is missing/blank", async () => {
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/projects")
                 .set(...AUTH)
                 .send({ name: "   " });
@@ -921,7 +925,7 @@ describe("projects.routes", () => {
         });
 
         it("rejects the retired shared_with input", async () => {
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/projects")
                 .set(...AUTH)
                 .send({ name: "Beta", shared_with: ["U1@Test.Local"] });
@@ -942,7 +946,7 @@ describe("projects.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/projects")
                 .set(...AUTH)
                 .send({
@@ -980,7 +984,7 @@ describe("projects.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/projects")
                 .set(...AUTH)
                 .send({ name: "Quiet" });
@@ -1006,7 +1010,7 @@ describe("projects.routes", () => {
                 error: { code: "42703", message: "project_memory_default" },
             };
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/projects")
                 .set(...AUTH)
                 .send({ name: "Legacy" });
@@ -1020,7 +1024,7 @@ describe("projects.routes", () => {
                 data: { id: "p10", name: "Private", user_id: "u1" },
                 error: null,
             };
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/projects")
                 .set(...AUTH)
                 .send({ name: "Private", memory_enabled: false });
@@ -1041,7 +1045,7 @@ describe("projects.routes", () => {
                 error: { message: "insert failed" },
             };
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/projects")
                 .set(...AUTH)
                 .send({ name: "Delta" });
@@ -1056,7 +1060,7 @@ describe("projects.routes", () => {
         it("returns 404 when the project does not exist", async () => {
             supabaseState.tables.projects = { data: null, error: null };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/projects/p1")
         .set(...AUTH);
 
@@ -1074,7 +1078,7 @@ describe("projects.routes", () => {
                 error: null,
             };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/projects/p1")
         .set(...AUTH);
 
@@ -1109,7 +1113,7 @@ describe("projects.routes", () => {
             supabaseState.tables.documents = { data: [], error: null };
             supabaseState.tables.project_subfolders = { data: [], error: null };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/projects/p1")
         .set(...AUTH);
 
@@ -1136,7 +1140,7 @@ describe("projects.routes", () => {
                 error: null,
             };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/projects/p1")
         .set(...AUTH);
 
@@ -1198,7 +1202,7 @@ describe("projects.routes", () => {
             async (projectRole) => {
                 seedDirectProject(projectRole);
 
-                const res = await request(app)
+                const res = await sharedHttpClient.request()
                     .get("/projects/p1/people")
                     .set(...AUTH);
 
@@ -1221,7 +1225,7 @@ describe("projects.routes", () => {
         it("still refuses somebody with no access at all", async () => {
             checkProjectAccess.mockResolvedValue({ ok: false });
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get("/projects/p1/people")
                 .set(...AUTH);
 
@@ -1232,7 +1236,7 @@ describe("projects.routes", () => {
         it("keeps the management surface owner-only", async () => {
             seedDirectProject("viewer");
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get("/projects/p1/access")
                 .set(...AUTH);
 
@@ -1266,7 +1270,7 @@ describe("projects.routes", () => {
         });
 
         it("allows a project owner (204)", async () => {
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .delete("/projects/p1/folders/f1")
                 .set(...AUTH);
             expect(res.status).toBe(204);
@@ -1274,7 +1278,7 @@ describe("projects.routes", () => {
 
         it("allows an editor — folder work is editor-level (204)", async () => {
             checkProjectAccess.mockResolvedValue(roleAccess("editor"));
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .delete("/projects/p1/folders/f1")
                 .set(...AUTH);
             expect(res.status).toBe(204);
@@ -1282,7 +1286,7 @@ describe("projects.routes", () => {
 
         it("blocks a viewer with a refusal, not a fake 404", async () => {
             checkProjectAccess.mockResolvedValue(roleAccess("viewer"));
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .delete("/projects/p1/folders/f1")
                 .set(...AUTH);
             expect(res.status).toBe(403);
@@ -1293,7 +1297,7 @@ describe("projects.routes", () => {
 
         it("still answers 404 when the project is invisible", async () => {
             checkProjectAccess.mockResolvedValue({ ok: false });
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .delete("/projects/p1/folders/f1")
                 .set(...AUTH);
             expect(res.status).toBe(404);
@@ -1314,7 +1318,7 @@ describe("projects.routes", () => {
                 project: { id: "p1", user_id: "u2", org_id: "o1" },
             });
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/projects/p1/folders")
                 .set(...AUTH)
                 .send({ name: "Closing" });
@@ -1329,7 +1333,7 @@ describe("projects.routes", () => {
         it("keeps 404 for a project the caller cannot see at all", async () => {
             checkProjectAccess.mockResolvedValue({ ok: false });
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/projects/p1/folders")
                 .set(...AUTH)
                 .send({ name: "Closing" });
@@ -1371,7 +1375,7 @@ describe("projects.routes", () => {
                 project: { id: "p1", user_id: "u2", org_id: "org-1" },
             });
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get("/projects/p1/chats")
                 .set(...AUTH);
 
@@ -1405,7 +1409,7 @@ describe("projects.routes", () => {
                 project: { id: "p1", user_id: "u2", org_id: "org-1" },
             });
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get("/projects/p1/chats")
                 .set(...AUTH);
 
@@ -1424,7 +1428,7 @@ describe("projects.routes", () => {
                 project: { id: "p1", user_id: "u2", org_id: null },
             });
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get("/projects/p1/chats")
                 .set(...AUTH);
 
@@ -1440,7 +1444,7 @@ describe("projects.routes", () => {
         it("returns 404 when checkProjectAccess denies access", async () => {
             checkProjectAccess.mockResolvedValue({ ok: false });
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get("/projects/p1/documents")
                 .set(...AUTH);
 
@@ -1455,7 +1459,7 @@ describe("projects.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get("/projects/p1/documents")
                 .set(...AUTH);
 
@@ -1468,7 +1472,7 @@ describe("projects.routes", () => {
     // ── PATCH /projects/:projectId ───────────────────────────────────────
     describe("PATCH /projects/:projectId", () => {
         it("rejects the retired shared_with input", async () => {
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .patch("/projects/p1")
                 .set(...AUTH)
                 .send({ shared_with: ["u1@test.local"] });
@@ -1482,7 +1486,7 @@ describe("projects.routes", () => {
         it("returns 404 when the update matches no owned project", async () => {
             supabaseState.tables.projects = { data: null, error: null };
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .patch("/projects/p1")
                 .set(...AUTH)
                 .send({ name: "Renamed" });
@@ -1500,7 +1504,7 @@ describe("projects.routes", () => {
         it("returns 404 when nothing was deleted", async () => {
             deleteProjectsByIds.mockResolvedValue(0);
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .delete("/projects/p1")
         .set(...AUTH);
 
@@ -1518,7 +1522,7 @@ describe("projects.routes", () => {
                 project: { id: "p1", user_id: "u2", org_id: "org-1" },
             });
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .delete("/projects/p1")
         .set(...AUTH);
 
@@ -1542,11 +1546,18 @@ describe("projects.routes", () => {
                     project: { id: "p1", user_id: "owner", org_id: null },
                 });
 
-                const res = await request(app)
+                const res = await sharedHttpClient.request()
                     .delete("/projects/p1")
                     .set(...AUTH);
 
-                expect(res.status).toBe(403);
+                expect(
+                    res.status,
+                    JSON.stringify({
+                        status: res.status,
+                        body: res.body,
+                        headers: res.headers,
+                    }),
+                ).toBe(403);
                 expect(res.body.detail).toBe(
                     "Only a project owner can delete this project.",
                 );
@@ -1558,7 +1569,7 @@ describe("projects.routes", () => {
         it("returns 404 when the caller has no access at all", async () => {
             checkProjectAccess.mockResolvedValue({ ok: false });
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .delete("/projects/p1")
                 .set(...AUTH);
 
@@ -1570,7 +1581,7 @@ describe("projects.routes", () => {
         it("returns 500 when deletion throws", async () => {
             deleteProjectsByIds.mockRejectedValue(new Error("cascade failed"));
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .delete("/projects/p1")
         .set(...AUTH);
 
@@ -1638,7 +1649,7 @@ describe("projects.routes", () => {
         it("returns 404 when the caller cannot access the project", async () => {
             checkProjectAccess.mockResolvedValue({ ok: false });
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get("/projects/p1/export")
                 .set(...AUTH);
 
@@ -1649,7 +1660,7 @@ describe("projects.routes", () => {
         it("returns the version hashes and the edit trail as an attachment", async () => {
             seedProjectWithOneVersion();
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get("/projects/p1/export")
                 .set(...AUTH);
 
@@ -1667,7 +1678,7 @@ describe("projects.routes", () => {
         it("carries a digest and no signature when signing is not configured", async () => {
             seedProjectWithOneVersion();
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get("/projects/p1/export")
                 .set(...AUTH);
 
@@ -1681,7 +1692,7 @@ describe("projects.routes", () => {
             try {
                 seedProjectWithOneVersion();
 
-                const res = await request(app)
+                const res = await sharedHttpClient.request()
                     .get("/projects/p1/export")
                     .set(...AUTH);
 
@@ -1721,7 +1732,7 @@ describe("projects.routes", () => {
         error: { message: 'relation "projects" does not exist' },
             };
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get("/projects/p1/export")
                 .set(...AUTH);
 

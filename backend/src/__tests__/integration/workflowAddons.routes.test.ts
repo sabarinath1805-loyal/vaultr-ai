@@ -1,6 +1,6 @@
 import express from "express";
-import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll, afterAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 
 const { from, eq, downloadFile, uploadFile, deleteFile, docxToPdf } =
   vi.hoisted(() => ({
@@ -47,6 +47,8 @@ vi.mock("../../lib/convert", async (importOriginal) => {
 
 import { workflowAddonsRouter } from "../../modules/workflows/workflowAddons.routes";
 
+
+
 function queryReturning(data: unknown[]) {
   const query: Record<string, unknown> = {};
   for (const method of ["select", "order", "in"]) {
@@ -75,6 +77,10 @@ function singleQueryReturning(data: unknown) {
 }
 
 const app = express();
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 app.use(express.json());
 app.use("/workflow-addons", workflowAddonsRouter);
 
@@ -113,7 +119,7 @@ describe("workflow add-on catalog routes", () => {
           ]),
     );
 
-    const response = await request(app).get("/workflow-addons?type=assistant");
+    const response = await sharedHttpClient.request().get("/workflow-addons?type=assistant");
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual([
@@ -144,7 +150,7 @@ describe("workflow add-on catalog routes", () => {
       ["post", "/workflow-addons/nope/import"],
       ["get", "/workflow-addons/nope/assets/reference-1/display"],
     ] as const) {
-      const res = await request(app)[method](path);
+      const res = await sharedHttpClient.request()[method](path);
       expect(res.status, `${method.toUpperCase()} ${path}`).toBe(404);
       expect(res.body).toEqual({ detail: "Add-on not found" });
     }
@@ -210,7 +216,7 @@ describe("workflow add-on catalog routes", () => {
       throw new Error(`Unexpected table ${table}`);
     });
 
-    const response = await request(app).post(
+    const response = await sharedHttpClient.request().post(
       "/workflow-addons/c0a7a1e1-0000-4000-8000-000000000001/import",
     );
 
@@ -258,7 +264,7 @@ describe("workflow add-on catalog routes", () => {
       throw new Error(`Unexpected table ${table}`);
     });
 
-    const response = await request(app).get(
+    const response = await sharedHttpClient.request().get(
       "/workflow-addons/c0a7a1e1-0000-4000-8000-000000000001/assets/reference-1/display",
     );
 

@@ -1,7 +1,7 @@
 import express from "express";
-import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll, afterAll } from "vitest";
 
+import { createSupertestClient } from "../../../__tests__/helpers/supertestClient";
 const {
     getUserApiKeyStatus,
     getAllUserRouterModels,
@@ -111,7 +111,13 @@ vi.mock("../../../lib/supabase", () => ({
 import { userRouter } from "../user.routes";
 import { normalizeRouterModels } from "../user.service";
 
+
+
 const app = express();
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 app.use(express.json());
 app.use("/user", userRouter);
 
@@ -150,7 +156,7 @@ describe("PATCH /user/profile router model selections", () => {
         // OpenRouter's catalog really contains "openrouter/auto". Stripping
         // the router prefix before validating would leave "auto", fail the
         // vendor/model shape check, and 400 the whole profile PATCH.
-        const response = await request(app)
+        const response = await sharedHttpClient.request()
             .patch("/user/profile")
             .send({ openRouterModels: ["openrouter/auto"] });
 
@@ -164,7 +170,7 @@ describe("PATCH /user/profile router model selections", () => {
     });
 
     it("accepts Vercel catalog ids that begin with the vercel slug", async () => {
-        const response = await request(app)
+        const response = await sharedHttpClient.request()
             .patch("/user/profile")
             .send({ vercelModels: ["vercel/v0-1.5-md"] });
 
@@ -178,7 +184,7 @@ describe("PATCH /user/profile router model selections", () => {
     });
 
     it("still canonicalizes composer-form ids to the raw catalog id", async () => {
-        const response = await request(app)
+        const response = await sharedHttpClient.request()
             .patch("/user/profile")
             .send({
                 openRouterModels: [
@@ -202,7 +208,7 @@ describe("PATCH /user/profile router model selections", () => {
             (_, index) => `vendor/model-${index}`,
         );
 
-        const response = await request(app)
+        const response = await sharedHttpClient.request()
             .patch("/user/profile")
             .send({ openRouterModels: models });
 
@@ -214,7 +220,7 @@ describe("PATCH /user/profile router model selections", () => {
     });
 
     it("rejects ids that are not vendor/model shaped", async () => {
-        const response = await request(app)
+        const response = await sharedHttpClient.request()
             .patch("/user/profile")
             .send({ openRouterModels: ["not a model"] });
 
@@ -226,7 +232,7 @@ describe("PATCH /user/profile router model selections", () => {
         // OpenCode Go publishes bare model names, so the vendor/model shape
         // the other two routers are validated against would reject its whole
         // catalog.
-        const response = await request(app)
+        const response = await sharedHttpClient.request()
             .patch("/user/profile")
             .send({ openCodeGoModels: ["glm-5", "opencode-go/kimi-k3"] });
 
@@ -240,7 +246,7 @@ describe("PATCH /user/profile router model selections", () => {
     });
 
     it("still rejects an OpenCode Go id containing whitespace", async () => {
-        const response = await request(app)
+        const response = await sharedHttpClient.request()
             .patch("/user/profile")
             .send({ openCodeGoModels: ["not a model"] });
 
@@ -252,7 +258,7 @@ describe("PATCH /user/profile router model selections", () => {
     });
 
     it("rejects OpenCode Go models that require an unsupported protocol", async () => {
-        const response = await request(app)
+        const response = await sharedHttpClient.request()
             .patch("/user/profile")
             .send({ openCodeGoModels: ["gpt-5.6-luna"] });
 

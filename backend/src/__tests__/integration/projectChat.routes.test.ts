@@ -1,5 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import request from "supertest";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
 
 const {
     runLLMStream,
@@ -158,8 +157,14 @@ vi.mock("../../lib/access", () => ({
 }));
 
 import { app } from "../../app";
+import { createSupertestClient } from "../helpers/supertestClient";
+
 import { spotlight } from "../../modules/chat/engine/index";
 import { createServerSupabase } from "../../lib/supabase";
+
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
 
 const VALID_BODY = {
     messages: [{ role: "user", content: "hello" }],
@@ -200,7 +205,7 @@ describe("POST /projects/:projectId/chat", () => {
     it("returns 404 and never streams when project access is denied", async () => {
         checkProjectAccess.mockResolvedValue({ ok: false });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/p1/chat")
             .set("Authorization", "Bearer test")
             .send(VALID_BODY);
@@ -212,7 +217,7 @@ describe("POST /projects/:projectId/chat", () => {
     });
 
     it("streams SSE on the happy path with project access granted", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/p1/chat")
             .set("Authorization", "Bearer test")
             .send(VALID_BODY);
@@ -289,7 +294,7 @@ describe("POST /projects/:projectId/chat", () => {
             api_keys: { openai: "test-key" },
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/p1/chat")
             .set("Authorization", "Bearer test")
             .send({ messages: VALID_BODY.messages });
@@ -301,7 +306,7 @@ describe("POST /projects/:projectId/chat", () => {
     });
 
     it("normalizes validated request fields before using them", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/p1/chat")
             .set("Authorization", "Bearer test")
             .send({
@@ -413,7 +418,7 @@ describe("POST /projects/:projectId/chat", () => {
     ])(
         "returns 400 before any side effect for a malformed request",
         async (body, detail) => {
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/projects/p1/chat")
                 .set("Authorization", "Bearer test")
                 .send(body);
@@ -441,7 +446,7 @@ describe("POST /projects/:projectId/chat", () => {
             folderPaths: new Map(),
         });
 
-        await request(app)
+        await sharedHttpClient.request()
             .post("/projects/p1/chat")
             .set("Authorization", "Bearer test")
             .send({
@@ -524,7 +529,7 @@ describe("POST /projects/:projectId/chat", () => {
         );
         vi.mocked(createServerSupabase).mockReturnValueOnce(db as never);
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/p1/chat")
             .set("Authorization", "Bearer test")
             .send({ ...VALID_BODY, chat_id: "chat-1" });
@@ -540,7 +545,7 @@ describe("POST /projects/:projectId/chat", () => {
     it("surfaces a stream failure as an in-stream error event, not an HTTP error", async () => {
         runLLMStream.mockRejectedValue(new Error("upstream LLM failure"));
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/p1/chat")
             .set("Authorization", "Bearer test")
             .send(VALID_BODY);
@@ -583,7 +588,7 @@ describe("POST /projects/:projectId/chat", () => {
             projectRole: "editor",
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/p1/chat")
             .set("Authorization", "Bearer test")
             .send({ ...VALID_BODY, chat_id: "chat-1" });
@@ -616,7 +621,7 @@ describe("POST /projects/:projectId/chat", () => {
             projectRole: "viewer",
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/p1/chat")
             .set("Authorization", "Bearer test")
             .send({ ...VALID_BODY, chat_id: "chat-1" });
@@ -635,7 +640,7 @@ describe("POST /projects/:projectId/chat", () => {
             project: { id: "p1", user_id: "u2" },
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/p1/chat")
             .set("Authorization", "Bearer test")
             .send({ ...VALID_BODY, chat_id: "chat-1" });
@@ -655,7 +660,7 @@ describe("POST /projects/:projectId/chat", () => {
             project: { id: "p1", user_id: "u2" },
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/p1/chat")
             .set("Authorization", "Bearer test")
             .send(VALID_BODY);
@@ -694,7 +699,7 @@ describe("POST /projects/:projectId/chat", () => {
             projectRole: "editor",
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/p1/chat")
             .set("Authorization", "Bearer test")
             .send({ ...VALID_BODY, chat_id: "chat-1" });
@@ -723,7 +728,7 @@ describe("POST /projects/:projectId/chat", () => {
             projectRole: "owner",
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/p1/chat")
             .set("Authorization", "Bearer test")
             .send({ ...VALID_BODY, chat_id: "chat-1" });
@@ -747,7 +752,7 @@ describe("POST /projects/:projectId/chat", () => {
             projectRole: "editor",
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/p1/chat")
             .set("Authorization", "Bearer test")
             .send({ ...VALID_BODY, chat_id: "chat-1" });
@@ -777,7 +782,7 @@ describe("POST /projects/:projectId/chat", () => {
             citations: [],
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/p1/chat")
             .set("Authorization", "Bearer test")
             .send({ ...VALID_BODY, chat_id: "chat-1" });

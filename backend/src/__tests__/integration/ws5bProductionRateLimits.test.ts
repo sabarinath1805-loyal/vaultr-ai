@@ -1,5 +1,5 @@
-import { afterAll, describe, expect, it, vi } from "vitest";
-import request from "supertest";
+import { afterAll, describe, expect, it, vi, beforeAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 
 const fakes = vi.hoisted(() => {
   const environmentNames = [
@@ -124,6 +124,10 @@ vi.mock("../../lib/storage", async (importOriginal) => {
 import { app } from "../../app";
 import { closeRedisConnection } from "../../lib/queue/connection";
 
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 const ip = (value: string) => ({ "X-Forwarded-For": value });
 const bearer = (id: string) => `Bearer ws5b-user-${id}`;
 
@@ -167,7 +171,7 @@ describe("WS5b production Express rate-limit assembly", () => {
 
     for (const testCase of cases) {
       for (let index = 0; index < 3; index++) {
-        const response = await request(app)
+        const response = await sharedHttpClient.request()
           .post(testCase.path)
           .set("Authorization", bearer(`${testCase.name}-${index}`))
           .set(ip(testCase.address))
@@ -175,7 +179,7 @@ describe("WS5b production Express rate-limit assembly", () => {
         expect(response.status, `${testCase.name} allowed request ${index}`).not.toBe(429);
         expect(response.body.code).not.toBe("rate_limit_unavailable");
       }
-      const blocked = await request(app)
+      const blocked = await sharedHttpClient.request()
         .post(testCase.path)
         .set("Authorization", bearer(`${testCase.name}-rotated-identity`))
         .set(ip(testCase.address))
@@ -186,7 +190,7 @@ describe("WS5b production Express rate-limit assembly", () => {
 
     const loginIp = "198.51.100.105";
     for (let index = 0; index < 3; index++) {
-      const response = await request(app)
+      const response = await sharedHttpClient.request()
         .post("/auth/login")
         .set("Origin", "http://localhost:3000")
         .set(ip(loginIp))
@@ -194,7 +198,7 @@ describe("WS5b production Express rate-limit assembly", () => {
       expect(response.status, `login failure ${index}`).not.toBe(429);
       expect(response.body.code).not.toBe("rate_limit_unavailable");
     }
-    const blockedLogin = await request(app)
+    const blockedLogin = await sharedHttpClient.request()
       .post("/auth/login")
       .set("Origin", "http://localhost:3000")
       .set(ip(loginIp))
@@ -215,14 +219,14 @@ describe("WS5b production Express rate-limit assembly", () => {
 
   it("keeps authenticated budgets keyed to users and shares export limits across aliases", async () => {
     const user = "single-export-user";
-    const first = await request(app)
+    const first = await sharedHttpClient.request()
       .post("/user/exports")
       .set("Authorization", bearer(user))
       .set(ip("198.51.100.111"))
       .send({ type: "account" });
     expect(first.status).not.toBe(429);
 
-    const aliasReplay = await request(app)
+    const aliasReplay = await sharedHttpClient.request()
       .post("/users/exports")
       .set("Authorization", bearer(user))
       .set(ip("198.51.100.112"))
@@ -230,7 +234,7 @@ describe("WS5b production Express rate-limit assembly", () => {
     expect(aliasReplay.status).toBe(429);
     expect(aliasReplay.headers["retry-after"]).toBeDefined();
 
-    const peer = await request(app)
+    const peer = await sharedHttpClient.request()
       .post("/users/exports")
       .set("Authorization", bearer("different-export-user"))
       .set(ip("198.51.100.112"))
@@ -240,21 +244,21 @@ describe("WS5b production Express rate-limit assembly", () => {
 
   it("keeps auth flows, general reads, and individual chat/upload budgets available during Redis outage", async () => {
     const origin = "http://localhost:3000";
-    const signUp = await request(app).post("/auth/signup").set("Origin", origin).set(ip("198.51.100.131")).send({
+    const signUp = await sharedHttpClient.request().post("/auth/signup").set("Origin", origin).set(ip("198.51.100.131")).send({
       email: "new-person@example.test",
       password: "synthetic-password-123",
     });
     expect(signUp.status).toBe(201);
     expect(signUp.body.code).not.toBe("rate_limit_unavailable");
 
-    const reset = await request(app)
+    const reset = await sharedHttpClient.request()
       .post("/auth/password-reset")
       .set("Origin", origin)
       .set(ip("198.51.100.132"))
       .send({ email: "existing-person@example.test" });
     expect(reset.status).toBe(204);
 
-    const generalRead = await request(app)
+    const generalRead = await sharedHttpClient.request()
       .get("/user/api-keys")
       .set("Authorization", bearer("ws5b-general-reader"))
       .set(ip("198.51.100.133"));
@@ -263,7 +267,7 @@ describe("WS5b production Express rate-limit assembly", () => {
 
     const user = "ws5b-chat-abuser";
     for (let index = 0; index < 2; index++) {
-      const response = await request(app)
+      const response = await sharedHttpClient.request()
         .post("/chat")
         .set("Authorization", bearer(user))
         .set(ip(`198.51.100.${140 + index}`))
@@ -271,7 +275,7 @@ describe("WS5b production Express rate-limit assembly", () => {
       expect(response.status).not.toBe(429);
       expect(response.body.code).not.toBe("rate_limit_unavailable");
     }
-    const chatOverBudget = await request(app)
+    const chatOverBudget = await sharedHttpClient.request()
       .post("/chat")
       .set("Authorization", bearer(user))
       .set(ip("198.51.100.142"))
@@ -280,7 +284,7 @@ describe("WS5b production Express rate-limit assembly", () => {
 
     const uploadUser = "ws5b-upload-abuser";
     for (let index = 0; index < 2; index++) {
-      const response = await request(app)
+      const response = await sharedHttpClient.request()
         .post("/upload-sessions")
         .set("Authorization", bearer(uploadUser))
         .set(ip(`198.51.100.${150 + index}`))
@@ -288,7 +292,7 @@ describe("WS5b production Express rate-limit assembly", () => {
       expect(response.status).not.toBe(429);
       expect(response.body.code).not.toBe("rate_limit_unavailable");
     }
-    const uploadOverBudget = await request(app)
+    const uploadOverBudget = await sharedHttpClient.request()
       .post("/upload-sessions")
       .set("Authorization", bearer(uploadUser))
       .set(ip("198.51.100.152"))
@@ -297,7 +301,7 @@ describe("WS5b production Express rate-limit assembly", () => {
   });
 
   it("keeps the existing fixed proxy-hop setting in the production app", async () => {
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .post("/chat")
       .set("Authorization", bearer("proxy-hop-user"))
       .set("X-Forwarded-For", "198.51.100.121, 203.0.113.9")

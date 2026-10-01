@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import request from "supertest";
+import { createSupertestClient } from "../helpers/supertestClient";
 
 // The route is registered at import time behind an env flag, so the flag has
 // to be set before app.ts evaluates — hence the dynamic import below.
@@ -17,14 +17,23 @@ vi.mock("../../lib/observability/sentry", async (importOriginal) => ({
 import type { app as builtApp } from "../../app";
 
 let app: typeof builtApp;
+let sharedHttpClient: ReturnType<typeof createSupertestClient>;
+const originalSentryTestRoute = process.env.SENTRY_ENABLE_TEST_ROUTE;
 
 beforeAll(async () => {
   process.env.SENTRY_ENABLE_TEST_ROUTE = "true";
   ({ app } = await import("../../app.js"));
+  sharedHttpClient = createSupertestClient(app);
+  await sharedHttpClient.start();
 });
 
-afterAll(() => {
-  delete process.env.SENTRY_ENABLE_TEST_ROUTE;
+afterAll(async () => {
+  await sharedHttpClient.close();
+  if (originalSentryTestRoute === undefined) {
+    delete process.env.SENTRY_ENABLE_TEST_ROUTE;
+  } else {
+    process.env.SENTRY_ENABLE_TEST_ROUTE = originalSentryTestRoute;
+  }
 });
 
 describe("GET /observability/sentry-test", () => {
@@ -33,7 +42,7 @@ describe("GET /observability/sentry-test", () => {
       .spyOn(console, "error")
       .mockImplementation(() => {});
 
-    const res = await request(app).get("/observability/sentry-test");
+    const res = await sharedHttpClient.request().get("/observability/sentry-test");
 
     expect(res.status).toBe(500);
     expect(res.body).toEqual({

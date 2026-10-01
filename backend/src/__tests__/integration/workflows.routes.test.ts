@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import request from "supertest";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 import {
     supabaseState,
     resetSupabaseState,
@@ -69,6 +69,10 @@ import { app } from "../../app";
 import { ensureDocAccess } from "../../lib/access";
 import { createServerSupabase, type Db } from "../../lib/supabase";
 import { resetEnsuredDefaultUsersForTests } from "../../lib/workflowCatalog";
+
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
 
 const AUTH = ["Authorization", "Bearer test"] as const;
 
@@ -143,7 +147,7 @@ describe("workflows.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get("/workflows?type=assistant")
                 .set(...AUTH);
 
@@ -178,7 +182,7 @@ describe("workflows.routes", () => {
                 error: null,
             };
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get("/workflows?type=assistant")
                 .set(...AUTH);
 
@@ -202,7 +206,7 @@ describe("workflows.routes", () => {
             const captured = captureRpcArgs();
             supabaseState.rpc = { data: [], error: null };
 
-      await request(app)
+      await sharedHttpClient.request()
         .get("/workflows?type=tabular")
         .set(...AUTH);
 
@@ -218,7 +222,7 @@ describe("workflows.routes", () => {
             const captured = captureRpcArgs();
             supabaseState.rpc = { data: [], error: null };
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get(
                     "/workflows?limit=10&scope=owned&sort_key=name&sort_direction=asc" +
                         "&search=nda&practice=Litigation&language=English&jurisdiction=NSW",
@@ -247,7 +251,7 @@ describe("workflows.routes", () => {
         it("returns 500 with detail when the RPC errors", async () => {
             supabaseState.rpc = { data: null, error: { message: "boom" } };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/workflows?type=assistant")
         .set(...AUTH);
 
@@ -288,7 +292,7 @@ describe("workflows.routes", () => {
                 ],
                 error: null,
             };
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get("/workflows/system?type=assistant")
                 .set(...AUTH);
 
@@ -324,7 +328,7 @@ describe("workflows.routes", () => {
                 return db as unknown as Db;
             });
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/workflows/ids")
         .set(...AUTH);
 
@@ -340,7 +344,7 @@ describe("workflows.routes", () => {
         it("returns 500 with detail when the RPC errors", async () => {
             supabaseState.rpc = { data: null, error: { message: "boom" } };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/workflows/ids")
         .set(...AUTH);
 
@@ -363,7 +367,7 @@ describe("workflows.routes", () => {
         error: null,
       };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/workflows/filter-options?type=assistant&scope=shared")
         .set(...AUTH);
 
@@ -385,7 +389,7 @@ describe("workflows.routes", () => {
 
   describe("POST /workflows/:workflowId/assets/from-documents", () => {
     it("rejects an empty saved-file selection", async () => {
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .post("/workflows/workflow-1/assets/from-documents")
         .set(...AUTH)
         .send({ document_ids: [] });
@@ -405,7 +409,7 @@ describe("workflows.routes", () => {
         error: null,
       };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .post("/workflows/workflow-1/assets/from-documents")
         .set(...AUTH)
         .send({ document_ids: ["document-1"] });
@@ -426,7 +430,7 @@ describe("workflows.routes", () => {
   // and nobody could edit.
   describe("organization workflows", () => {
     const create = (body: Record<string, unknown>) =>
-      request(app)
+      sharedHttpClient.request()
         .post("/workflows")
         .set(...AUTH)
         .send({
@@ -501,7 +505,7 @@ describe("workflows.routes", () => {
       supabaseState.tables.workflow_shares = { data: null, error: null };
       getOrgRole.mockResolvedValue("member");
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .patch("/workflows/w-org")
         .set(...AUTH)
         .send({ metadata: { title: "Firm playbook v2" } });
@@ -520,7 +524,7 @@ describe("workflows.routes", () => {
       supabaseState.tables.workflow_shares = { data: null, error: null };
       getOrgRole.mockResolvedValue(null);
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .patch("/workflows/w-org")
         .set(...AUTH)
         .send({ metadata: { title: "Nope" } });
@@ -537,7 +541,7 @@ describe("workflows.routes", () => {
       };
       supabaseState.tables.user_profiles = { data: [], error: null };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .post("/workflows/w-personal/share")
         .set(...AUTH)
         .send({ emails: ["future@firm.test"], role: "viewer" });
@@ -559,7 +563,7 @@ describe("workflows.routes", () => {
       };
       supabaseState.tables.workflow_shares = { data: null, error: null };
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .post("/workflows/w-personal/share")
         .set(...AUTH)
         .send({ emails: ["colleague@firm.test"], role: "editor" });
@@ -584,7 +588,7 @@ describe("workflows.routes", () => {
           error: null,
         };
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
           .delete("/workflows/w-personal/shares/s1")
           .set(...AUTH);
 
@@ -594,7 +598,7 @@ describe("workflows.routes", () => {
       it("returns 404 when the share id matched nothing", async () => {
         supabaseState.tables.workflow_shares = { data: [], error: null };
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
           .delete("/workflows/w-personal/shares/s-unknown")
           .set(...AUTH);
 
@@ -608,7 +612,7 @@ describe("workflows.routes", () => {
           error: { message: "boom" },
         };
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
           .delete("/workflows/w-personal/shares/s1")
           .set(...AUTH);
 
@@ -691,7 +695,7 @@ describe("workflows.routes", () => {
         data: { id: "w-org", user_id: "u1", org_id: "org-1" },
         error: null,
       };
-      return request(app)
+      return sharedHttpClient.request()
         .post("/workflows/w-org/share")
         .set(...AUTH)
         .send({ emails, role: "viewer" });
@@ -807,7 +811,7 @@ describe("workflows.routes", () => {
       getOrgRole.mockResolvedValue("admin");
       const queries = captureWorkflowQueries();
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .delete("/workflows/w-orphan")
         .set(...AUTH);
 
@@ -827,7 +831,7 @@ describe("workflows.routes", () => {
       supabaseState.tables.workflows = { data: detached, error: null };
       getOrgRole.mockResolvedValue("member");
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .delete("/workflows/w-orphan")
         .set(...AUTH);
 
@@ -841,7 +845,7 @@ describe("workflows.routes", () => {
       };
       getOrgRole.mockResolvedValue("admin");
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .delete("/workflows/w-orphan")
         .set(...AUTH);
 
@@ -853,7 +857,7 @@ describe("workflows.routes", () => {
       supabaseState.tables.workflow_shares = { data: [], error: null };
       getOrgRole.mockResolvedValue("admin");
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/workflows/w-orphan/shares")
         .set(...AUTH);
 
@@ -865,7 +869,7 @@ describe("workflows.routes", () => {
       supabaseState.tables.workflows = { data: detached, error: null };
       getOrgRole.mockResolvedValue("member");
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .get("/workflows/w-orphan/shares")
         .set(...AUTH);
 
@@ -970,7 +974,7 @@ describe("workflows.routes", () => {
       });
       vi.mocked(createServerSupabase).mockImplementationOnce(() => db);
 
-      const res = await request(app)
+      const res = await sharedHttpClient.request()
         .post("/workflows/w-org/assets/from-documents")
         .set(...AUTH)
         .send({ document_ids: [DOC_ID] });

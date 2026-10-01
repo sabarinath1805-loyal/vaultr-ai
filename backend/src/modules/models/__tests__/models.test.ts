@@ -1,7 +1,7 @@
 import express from "express";
-import request from "supertest";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, beforeAll, afterAll } from "vitest";
 
+import { createSupertestClient } from "../../../__tests__/helpers/supertestClient";
 const { getUserApiKeys } = vi.hoisted(() => ({
     getUserApiKeys: vi.fn(),
 }));
@@ -27,12 +27,18 @@ vi.mock("../../user/user.apiKeyStore", () => ({
 
 import { modelsRouter } from "../models.routes";
 import { resetModelRegistryCache } from "../../../lib/llm/registry";
+
+
 import {
     INTERNAL_ERROR_CODE,
     INTERNAL_ERROR_MESSAGE,
 } from "../../../lib/httpError";
 
 const app = express();
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 app.use("/models", modelsRouter);
 
 describe("GET /models/configured", () => {
@@ -80,7 +86,7 @@ describe("GET /models/configured", () => {
     });
 
     it("returns only usable models without exposing endpoint credentials", async () => {
-        const response = await request(app).get("/models/configured");
+        const response = await sharedHttpClient.request().get("/models/configured");
 
         expect(response.status).toBe(200);
         expect(response.body.models).toEqual([
@@ -124,7 +130,7 @@ describe("GET /models/openrouter", () => {
             );
         vi.stubGlobal("fetch", fetchMock);
 
-        const response = await request(app).get("/models/openrouter");
+        const response = await sharedHttpClient.request().get("/models/openrouter");
 
         expect(response.status).toBe(200);
         expect(String(fetchMock.mock.calls[0]?.[0])).toMatch(
@@ -137,7 +143,7 @@ describe("GET /models/openrouter", () => {
         const fetchMock = vi.fn();
         vi.stubGlobal("fetch", fetchMock);
 
-        const response = await request(app).get("/models/openrouter");
+        const response = await sharedHttpClient.request().get("/models/openrouter");
 
         expect(response.status).toBe(422);
         expect(response.body.code).toBe("missing_api_key");
@@ -169,7 +175,7 @@ describe("GET /models/openrouter", () => {
         );
         vi.stubGlobal("fetch", fetchMock);
 
-        const response = await request(app).get("/models/openrouter");
+        const response = await sharedHttpClient.request().get("/models/openrouter");
 
         expect(response.status).toBe(200);
         expect(response.body.models).toEqual([
@@ -196,7 +202,7 @@ describe("GET /models/openrouter", () => {
                 ),
         );
 
-        const response = await request(app).get("/models/openrouter");
+        const response = await sharedHttpClient.request().get("/models/openrouter");
 
         expect(response.status).toBe(502);
         expect(response.body).toEqual({
@@ -222,7 +228,7 @@ describe("GET /models/vercel", () => {
         const fetchMock = vi.fn();
         vi.stubGlobal("fetch", fetchMock);
 
-        const response = await request(app).get("/models/vercel");
+        const response = await sharedHttpClient.request().get("/models/vercel");
 
         expect(response.status).toBe(422);
         expect(response.body.code).toBe("missing_api_key");
@@ -280,7 +286,7 @@ describe("GET /models/vercel", () => {
             ),
         );
 
-        const response = await request(app).get("/models/vercel");
+        const response = await sharedHttpClient.request().get("/models/vercel");
 
         expect(response.status).toBe(200);
         expect(response.body.models).toEqual([
@@ -325,7 +331,7 @@ describe("GET /models/opencode-go", () => {
         const fetchMock = vi.fn();
         vi.stubGlobal("fetch", fetchMock);
 
-        const response = await request(app).get("/models/opencode-go");
+        const response = await sharedHttpClient.request().get("/models/opencode-go");
 
         expect(response.status).toBe(422);
         expect(response.body.code).toBe("missing_api_key");
@@ -361,7 +367,7 @@ describe("GET /models/opencode-go", () => {
         );
         vi.stubGlobal("fetch", fetchMock);
 
-        const response = await request(app).get("/models/opencode-go");
+        const response = await sharedHttpClient.request().get("/models/opencode-go");
 
         expect(response.status).toBe(200);
         expect(response.body.models).toEqual([
@@ -387,7 +393,7 @@ describe("GET /models/opencode-go", () => {
             );
         vi.stubGlobal("fetch", fetchMock);
 
-        const response = await request(app).get("/models/opencode-go");
+        const response = await sharedHttpClient.request().get("/models/opencode-go");
 
         expect(response.status).toBe(200);
         expect(fetchMock.mock.calls[0]?.[0]).toBe(
@@ -404,7 +410,7 @@ describe("GET /models/opencode-go", () => {
             vi.fn().mockResolvedValue(new Response("nope", { status: 401 })),
         );
 
-        const response = await request(app).get("/models/opencode-go");
+        const response = await sharedHttpClient.request().get("/models/opencode-go");
 
         expect(response.status).toBe(502);
         expect(response.body).toEqual({

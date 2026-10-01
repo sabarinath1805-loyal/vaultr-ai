@@ -1,7 +1,9 @@
 import express from "express";
-import request from "supertest";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, beforeAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 import { authenticatedRateLimit, ipRateLimiter } from "../../lib/rateLimit";
+
+
 
 const originalEnv = {
   NODE_ENV: process.env.NODE_ENV,
@@ -17,6 +19,10 @@ process.env.RATE_LIMIT_CHAT_MAX = "2";
 delete process.env.RATE_LIMIT_CHAT_IP_MAX;
 
 const app = express();
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 app.set("trust proxy", 1);
 app.post(
   "/chat",
@@ -43,14 +49,21 @@ describe("WS5b shared-office chat defaults", () => {
     // enough for one request from each of 100 distinct users. At the real
     // chat defaults, the equivalent ceiling is 30 * 50 = 1,500/IP/window.
     for (let user = 0; user < 100; user++) {
-      const response = await request(app)
+      const response = await sharedHttpClient.request()
         .post("/chat")
         .set("X-Test-User", `office-user-${user}`)
         .set("X-Forwarded-For", officeIp);
-      expect(response.status, `user ${user}`).toBe(204);
+      expect(
+        response.status,
+        `user ${user}: ${JSON.stringify({
+          status: response.status,
+          body: response.text,
+          headers: response.headers,
+        })}`,
+      ).toBe(204);
     }
 
-    const overBudget = await request(app)
+    const overBudget = await sharedHttpClient.request()
       .post("/chat")
       .set("X-Test-User", "office-user-after-budget")
       .set("X-Forwarded-For", officeIp);

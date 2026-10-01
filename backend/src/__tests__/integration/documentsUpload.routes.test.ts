@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import request from "supertest";
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 
 function mockSupabase() {
     const result = { data: null, error: null };
@@ -57,9 +57,13 @@ vi.mock("../../lib/storage", async (importOriginal) => {
 
 import { app } from "../../app";
 
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 describe("legacy multipart upload endpoints", () => {
     it("rejects multipart bytes before parsing the body", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/single-documents")
             .set("Authorization", "Bearer test")
             .attach("file", Buffer.from("hello world"), {
@@ -80,7 +84,7 @@ describe("legacy multipart upload endpoints", () => {
         ["post", "/single-documents/11111111-1111-4111-8111-111111111111/versions"],
         ["put", "/single-documents/11111111-1111-4111-8111-111111111111/versions/22222222-2222-4222-8222-222222222222/file"],
     ] as const)("returns 410 for %s %s", async (method, path) => {
-        const res = await request(app)[method](path)
+        const res = await sharedHttpClient.request()[method](path)
             .set("Authorization", "Bearer test")
             .set("Content-Type", "application/octet-stream")
             .send(Buffer.alloc(1024));
@@ -92,7 +96,7 @@ describe("legacy multipart upload endpoints", () => {
 
 describe("POST /single-documents/download-zip — bounds", () => {
     it("returns 400 when document_ids is empty", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/single-documents/download-zip")
             .set("Authorization", "Bearer test")
             .send({ document_ids: [] });
@@ -102,7 +106,7 @@ describe("POST /single-documents/download-zip — bounds", () => {
     });
 
     it("rejects more than 200 requested documents before database or storage work", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/single-documents/download-zip")
             .set("Authorization", "Bearer test")
             .send({
@@ -119,7 +123,7 @@ describe("POST /single-documents/download-zip — bounds", () => {
     it("returns 404 when none of the requested documents are accessible", async () => {
         // The documents lookup resolves to no rows (stubbed DB), so the
         // access filter leaves nothing to zip.
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/single-documents/download-zip")
             .set("Authorization", "Bearer test")
             .send({ document_ids: ["d-other-user"] });
@@ -129,7 +133,7 @@ describe("POST /single-documents/download-zip — bounds", () => {
     });
 
     it("accepts folder-only downloads without requiring loaded document ids", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/single-documents/download-zip")
             .set("Authorization", "Bearer test")
             .send({ folder_ids: ["folder-not-accessible"] });

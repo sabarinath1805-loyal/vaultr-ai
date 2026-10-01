@@ -1,8 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import request from "supertest";
+import { afterEach, describe, expect, it, vi, beforeAll, afterAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 import { app } from "../../app";
 import { validSpreadsheetBuffer } from "../fixtures/spreadsheetBuffer";
 import { spreadsheetToLLMText } from "../../lib/spreadsheet";
+
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
 
 const MALFORMED_XLSX = Buffer.from("504b03041400060008000000", "hex");
 
@@ -58,8 +62,8 @@ describe("spreadsheet parser backend responsiveness", () => {
     const requestStart = Date.now();
     const [health, unrelated] = await within(
       Promise.all([
-        request(app).get("/health"),
-        request(app).get("/manifest-signing-key"),
+        sharedHttpClient.request().get("/health"),
+        sharedHttpClient.request().get("/manifest-signing-key"),
       ]),
       2_000,
     );

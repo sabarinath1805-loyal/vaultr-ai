@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import request from "supertest";
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 
 // requireAuth reads SUPABASE_URL / SUPABASE_SECRET_KEY from process.env at
 // request time (not import time), so setting them here is early enough even
@@ -21,6 +21,10 @@ vi.mock("@supabase/supabase-js", () => ({
 
 import { app, configuredAllowedOrigins } from "../../app";
 
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 const ALLOWED_ORIGIN = process.env.FRONTEND_URL ?? "http://localhost:3000";
 
 describe("CORS allowlist", () => {
@@ -40,7 +44,7 @@ describe("CORS allowlist", () => {
         ]);
     });
     it("exposes the request id to cross-origin scripts", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .get("/health")
             .set("Origin", ALLOWED_ORIGIN);
         expect(res.headers["access-control-expose-headers"]).toBe("X-Request-ID");
@@ -48,7 +52,7 @@ describe("CORS allowlist", () => {
     });
 
     it("reflects an allowlisted origin with credentials", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .options("/chat")
             .set("Origin", ALLOWED_ORIGIN)
             .set("Access-Control-Request-Method", "POST");
@@ -57,7 +61,7 @@ describe("CORS allowlist", () => {
     });
 
     it("omits Access-Control-Allow-Origin for a non-allowlisted origin", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .options("/chat")
             .set("Origin", "https://evil.example")
             .set("Access-Control-Request-Method", "POST");
@@ -65,7 +69,7 @@ describe("CORS allowlist", () => {
     });
 
     it("does not turn a disallowed origin into a 5xx", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .options("/chat")
             .set("Origin", "https://evil.example")
             .set("Access-Control-Request-Method", "POST");
@@ -73,7 +77,7 @@ describe("CORS allowlist", () => {
     });
 
     it("limits preflight-approved request headers to Authorization and Content-Type", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .options("/chat")
             .set("Origin", ALLOWED_ORIGIN)
             .set("Access-Control-Request-Method", "POST")

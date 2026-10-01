@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import request from "supertest";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 
 // ---------------------------------------------------------------------------
 // GET /projects?view=directory-search — the document picker's own access
@@ -99,6 +99,10 @@ vi.mock("../../lib/documentVersions", () => ({
 import { app } from "../../app";
 import { createServerSupabase } from "../../lib/supabase";
 
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 const AUTH = ["Authorization", "Bearer test"] as const;
 
 type Project = Record<string, unknown>;
@@ -195,7 +199,7 @@ function useDb(handle: { db: unknown }) {
 }
 
 const search = () =>
-    request(app).get("/projects?view=directory-search&search=Matter").set(...AUTH);
+    sharedHttpClient.request().get("/projects?view=directory-search&search=Matter").set(...AUTH);
 
 // The caller created this org matter and then left the firm. The
 // projects.user_id row survives their departure; their access does not.

@@ -1,6 +1,6 @@
 import express from "express";
-import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withSupertestClient } from "../__tests__/helpers/supertestClient";
 
 const reportMessage = vi.hoisted(() => vi.fn(() => "event-1"));
 vi.mock("../lib/observability/sentry", async (importOriginal) => ({
@@ -35,8 +35,11 @@ describe("protectInternalErrorResponses", () => {
 
   it("omits callback query credentials from logs and error reports", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    await request(testApp(500, { detail: "callback failed" }))
-      .get("/test?code=private-oauth-code&state=private-oauth-state");
+    await withSupertestClient(
+      testApp(500, { detail: "callback failed" }),
+      (client) =>
+        client.request().get("/test?code=private-oauth-code&state=private-oauth-state"),
+    );
     expect(reportMessage).toHaveBeenCalledWith("callback failed", expect.objectContaining({
       extra: expect.objectContaining({ path: "/test" }),
     }));
@@ -59,8 +62,10 @@ describe("protectInternalErrorResponses", () => {
     app.use("/projects", projects);
     app.use("/documents", documents);
 
-    await request(app).get("/projects/p-1");
-    await request(app).get("/documents/d-1");
+    await withSupertestClient(app, async (client) => {
+      await client.request().get("/projects/p-1");
+      await client.request().get("/documents/d-1");
+    });
 
     expect(reportMessage).toHaveBeenCalledTimes(2);
     const [first, second] = reportMessage.mock.calls as unknown as [
@@ -80,10 +85,13 @@ describe("protectInternalErrorResponses", () => {
         .spyOn(console, "error")
         .mockImplementation(() => {});
 
-      const res = await request(testApp(status, {
-        detail: "relation private_table does not exist",
-        stack: "secret stack",
-      })).get("/test");
+      const res = await withSupertestClient(
+        testApp(status, {
+          detail: "relation private_table does not exist",
+          stack: "secret stack",
+        }),
+        (client) => client.request().get("/test"),
+      );
 
       expect(res.status).toBe(status);
       expect(res.body).toEqual({
@@ -99,7 +107,9 @@ describe("protectInternalErrorResponses", () => {
 
   it("does not rewrite intentional client errors", async () => {
     const body = { code: "invalid_filename", detail: "Filename is required" };
-    const res = await request(testApp(400, body)).get("/test");
+    const res = await withSupertestClient(testApp(400, body), (client) =>
+      client.request().get("/test"),
+    );
     expect(res.status).toBe(400);
     expect(res.body).toEqual(body);
   });
@@ -108,14 +118,15 @@ describe("protectInternalErrorResponses", () => {
     const consoleError = vi
       .spyOn(console, "error")
       .mockImplementation(() => {});
-    const res = await request(
+    const res = await withSupertestClient(
       testApp(500, {
         code: INTERNAL_ERROR_CODE,
         detail: INTERNAL_ERROR_MESSAGE,
         request_id: "untrusted-request-id",
         stack: "secret stack",
       }),
-    ).get("/test");
+      (client) => client.request().get("/test"),
+    );
 
     expect(res.body).toEqual({
       code: INTERNAL_ERROR_CODE,
@@ -141,7 +152,9 @@ describe("protectInternalErrorResponses", () => {
     });
     app.use(handleUnhandledError);
 
-    const res = await request(app).get("/test");
+    const res = await withSupertestClient(app, (client) =>
+      client.request().get("/test"),
+    );
 
     expect(res.status).toBe(500);
     expect(res.body).toEqual({
@@ -164,10 +177,12 @@ describe("protectInternalErrorResponses", () => {
     app.post("/test", (_req, res) => res.sendStatus(204));
     app.use(handleUnhandledError);
 
-    const res = await request(app)
-      .post("/test")
-      .set("Content-Type", "application/json")
-      .send('{"secret":');
+    const res = await withSupertestClient(app, (client) =>
+      client.request()
+        .post("/test")
+        .set("Content-Type", "application/json")
+        .send('{"secret":'),
+    );
 
     expect(res.status).toBe(400);
     expect(res.body).toEqual({
@@ -189,10 +204,12 @@ describe("protectInternalErrorResponses", () => {
     app.post("/test", (_req, res) => res.sendStatus(204));
     app.use(handleUnhandledError);
 
-    const res = await request(app)
-      .post("/test")
-      .set("Content-Type", "application/json")
-      .send(JSON.stringify({ secret: "a very long internal payload" }));
+    const res = await withSupertestClient(app, (client) =>
+      client.request()
+        .post("/test")
+        .set("Content-Type", "application/json")
+        .send(JSON.stringify({ secret: "a very long internal payload" })),
+    );
 
     expect(res.status).toBe(413);
     expect(res.body).toEqual({

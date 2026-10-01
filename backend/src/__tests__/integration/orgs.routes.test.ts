@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import request from "supertest";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 
 // ---------------------------------------------------------------------------
 // Organizations, invitations and project organization overrides, over HTTP.
@@ -272,6 +272,10 @@ vi.mock("../../lib/documentVersions", () => ({
 
 import { app } from "../../app";
 
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 const AUTH = ["Authorization", "Bearer test"] as const;
 const as = (id: string, email: string) => {
     currentUser = { id, email };
@@ -289,7 +293,7 @@ beforeEach(() => {
 describe("GET /orgs", () => {
     it("returns each membership with the caller's role and roster size", async () => {
         as("member-1", "member@firm.example");
-        const res = await request(app).get("/orgs").set(...AUTH);
+        const res = await sharedHttpClient.request().get("/orgs").set(...AUTH);
         expect(res.status).toBe(200);
         expect(res.body).toEqual([
             expect.objectContaining({
@@ -303,7 +307,7 @@ describe("GET /orgs", () => {
 
     it("is empty for someone in no organization — there is no personal org", async () => {
         as("loner", "loner@example.com");
-        const res = await request(app).get("/orgs").set(...AUTH);
+        const res = await sharedHttpClient.request().get("/orgs").set(...AUTH);
         expect(res.status).toBe(200);
         expect(res.body).toEqual([]);
     });
@@ -312,7 +316,7 @@ describe("GET /orgs", () => {
 describe("POST /orgs", () => {
     it("creates the org and makes the caller its first admin", async () => {
         as("founder", "founder@new.example");
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/orgs")
             .set(...AUTH)
             .send({ name: "  New Firm  " });
@@ -324,7 +328,7 @@ describe("POST /orgs", () => {
     });
 
     it("400s a blank name", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/orgs")
             .set(...AUTH)
             .send({ name: "   " });
@@ -335,12 +339,12 @@ describe("POST /orgs", () => {
 describe("org membership", () => {
     it("404s an org the caller does not belong to", async () => {
         as("stranger", "stranger@example.com");
-        const res = await request(app).get("/orgs/org-1").set(...AUTH);
+        const res = await sharedHttpClient.request().get("/orgs/org-1").set(...AUTH);
         expect(res.status).toBe(404);
     });
 
     it("lists members with their identity for the roster UI", async () => {
-        const res = await request(app).get("/orgs/org-1/members").set(...AUTH);
+        const res = await sharedHttpClient.request().get("/orgs/org-1/members").set(...AUTH);
         expect(res.status).toBe(200);
         expect(res.body).toEqual([
             expect.objectContaining({
@@ -358,7 +362,7 @@ describe("org membership", () => {
     });
 
     it("409s an attempt to demote the last admin", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .patch("/orgs/org-1/members/admin-1")
             .set(...AUTH)
             .send({ role: "member" });
@@ -370,7 +374,7 @@ describe("org membership", () => {
 
     it("403s a plain member trying to re-role somebody", async () => {
         as("member-1", "member@firm.example");
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .patch("/orgs/org-1/members/admin-1")
             .set(...AUTH)
             .send({ role: "member" });
@@ -380,7 +384,7 @@ describe("org membership", () => {
 
     it("lets a member leave on their own (204)", async () => {
         as("member-1", "member@firm.example");
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete("/orgs/org-1/members/member-1")
             .set(...AUTH);
         expect(res.status).toBe(204);
@@ -389,7 +393,7 @@ describe("org membership", () => {
 
     it("has no endpoint that adds a member directly", async () => {
         // Membership only ever arrives through an accepted invitation.
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/orgs/org-1/members")
             .set(...AUTH)
             .send({ email: "someone@example.com", role: "member" });
@@ -400,7 +404,7 @@ describe("org membership", () => {
 describe("organization workspace", () => {
     it("lists only organization-scoped projects and workflows", async () => {
         as("member-1", "member@firm.example");
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .get("/orgs/org-1/resources")
             .set(...AUTH);
         expect(res.status).toBe(200);
@@ -416,14 +420,14 @@ describe("organization workspace", () => {
 
     it("hides the resource inventory from non-members", async () => {
         as("stranger", "stranger@example.com");
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .get("/orgs/org-1/resources")
             .set(...AUTH);
         expect(res.status).toBe(404);
     });
 
     it("requires an admin to empty an organization before deleting it", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete("/orgs/org-1")
             .set(...AUTH);
         expect(res.status).toBe(409);
@@ -434,7 +438,7 @@ describe("organization workspace", () => {
         tables.chats = [];
         tables.tabular_reviews = [];
         tables.workflows = [];
-        const emptied = await request(app)
+        const emptied = await sharedHttpClient.request()
             .delete("/orgs/org-1")
             .set(...AUTH);
         expect(emptied.status).toBe(204);
@@ -443,7 +447,7 @@ describe("organization workspace", () => {
 
     it("refuses organization deletion to a plain member", async () => {
         as("member-1", "member@firm.example");
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete("/orgs/org-1")
             .set(...AUTH);
         expect(res.status).toBe(403);
@@ -456,7 +460,7 @@ describe("organization workspace", () => {
 // ---------------------------------------------------------------------------
 
 async function invite(email: string, role = "member") {
-    return request(app)
+    return sharedHttpClient.request()
         .post("/orgs/org-1/invitations")
         .set(...AUTH)
         .send({ email, role });
@@ -497,7 +501,7 @@ describe("organization invitations", () => {
     // same 400 that updateMember and project sharing already give.
     it("400s a retired role name rather than quietly downgrading it", async () => {
         for (const role of ["owner", "manager", "editor"]) {
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/orgs/org-1/invitations")
                 .set(...AUTH)
                 .send({ email: "new@hire.example", role });
@@ -507,7 +511,7 @@ describe("organization invitations", () => {
     });
 
     it("still defaults an omitted role to member", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/orgs/org-1/invitations")
             .set(...AUTH)
             .send({ email: "new@hire.example" });
@@ -517,7 +521,7 @@ describe("organization invitations", () => {
 
     it("shows an admin the invitation roster, and hides it from members", async () => {
         await invite("new@hire.example");
-        const admin = await request(app)
+        const admin = await sharedHttpClient.request()
             .get("/orgs/org-1/invitations")
             .set(...AUTH);
         expect(admin.status).toBe(200);
@@ -530,7 +534,7 @@ describe("organization invitations", () => {
         ]);
 
         as("member-1", "member@firm.example");
-        const member = await request(app)
+        const member = await sharedHttpClient.request()
             .get("/orgs/org-1/invitations")
             .set(...AUTH);
         expect(member.status).toBe(403);
@@ -541,7 +545,7 @@ describe("organization invitations", () => {
         const invitationId = created.body.id as string;
 
         as("new-hire", "New@Hire.example");
-        const mine = await request(app).get("/user/invitations").set(...AUTH);
+        const mine = await sharedHttpClient.request().get("/user/invitations").set(...AUTH);
         expect(mine.status).toBe(200);
         expect(mine.body).toEqual([
             expect.objectContaining({
@@ -552,7 +556,7 @@ describe("organization invitations", () => {
             }),
         ]);
 
-        const accepted = await request(app)
+        const accepted = await sharedHttpClient.request()
             .post(`/user/invitations/${invitationId}/accept`)
             .set(...AUTH);
         expect(accepted.status).toBe(200);
@@ -565,7 +569,7 @@ describe("organization invitations", () => {
     it("204s a decline and creates no membership", async () => {
         const created = await invite("new@hire.example");
         as("new-hire", "new@hire.example");
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post(`/user/invitations/${created.body.id}/decline`)
             .set(...AUTH);
         expect(res.status).toBe(204);
@@ -576,7 +580,7 @@ describe("organization invitations", () => {
     it("404s somebody else's invitation rather than confirming it exists", async () => {
         const created = await invite("new@hire.example");
         as("intruder", "intruder@elsewhere.example");
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post(`/user/invitations/${created.body.id}/accept`)
             .set(...AUTH);
         expect(res.status).toBe(404);
@@ -590,19 +594,19 @@ describe("organization invitations", () => {
         ).toISOString();
 
         as("new-hire", "new@hire.example");
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post(`/user/invitations/${created.body.id}/accept`)
             .set(...AUTH);
         expect(res.status).toBe(410);
         expect(res.body.detail).toBe("That invitation has expired.");
         // ...and it is not offered in the recipient's list either.
-        const mine = await request(app).get("/user/invitations").set(...AUTH);
+        const mine = await sharedHttpClient.request().get("/user/invitations").set(...AUTH);
         expect(mine.body).toEqual([]);
     });
 
     it("an admin cancels an invitation, and acceptance then 404s", async () => {
         const created = await invite("new@hire.example");
-        const cancelled = await request(app)
+        const cancelled = await sharedHttpClient.request()
             .delete(`/orgs/org-1/invitations/${created.body.id}`)
             .set(...AUTH);
         expect(cancelled.status).toBe(204);
@@ -613,7 +617,7 @@ describe("organization invitations", () => {
         // "That invitation is no longer available. It may have been
         // cancelled."
         as("new-hire", "new@hire.example");
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post(`/user/invitations/${created.body.id}/accept`)
             .set(...AUTH);
         expect(res.status).toBe(404);
@@ -624,7 +628,7 @@ describe("organization invitations", () => {
         tables.org_invitations[0].expires_at = new Date(
             Date.now() - 1000,
         ).toISOString();
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post(`/orgs/org-1/invitations/${created.body.id}/resend`)
             .set(...AUTH);
         expect(res.status).toBe(200);
@@ -637,9 +641,9 @@ describe("organization invitations", () => {
         await invite("future@hire.example", "member");
         // A brand-new account whose profile did not exist at invite time.
         as("brand-new", "future@hire.example");
-        const mine = await request(app).get("/user/invitations").set(...AUTH);
+        const mine = await sharedHttpClient.request().get("/user/invitations").set(...AUTH);
         expect(mine.body).toHaveLength(1);
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post(`/user/invitations/${mine.body[0].id}/accept`)
             .set(...AUTH);
         expect(res.status).toBe(200);
@@ -655,7 +659,7 @@ describe("organization invitations", () => {
 
 describe("project organization overrides over HTTP", () => {
     it("an owner assigns an organization member a chosen resource role", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/proj-1/access")
             .set(...AUTH)
             .send({ email: "member@firm.example", role: "viewer" });
@@ -676,13 +680,13 @@ describe("project organization overrides over HTTP", () => {
     });
 
     it("400s an invalid role and self-sharing", async () => {
-        const badRole = await request(app)
+        const badRole = await sharedHttpClient.request()
             .post("/projects/proj-1/access")
             .set(...AUTH)
             .send({ email: "x@y.example", role: "manager" });
         expect(badRole.status).toBe(400);
 
-        const self = await request(app)
+        const self = await sharedHttpClient.request()
             .post("/projects/proj-1/access")
             .set(...AUTH)
             .send({ email: "Admin@Firm.example", role: "editor" });
@@ -703,7 +707,7 @@ describe("project organization overrides over HTTP", () => {
             display_name: "Pat",
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/proj-1/access")
             .set(...AUTH)
             .send({ email: "partner@firm.example", role: "deny" });
@@ -717,7 +721,7 @@ describe("project organization overrides over HTTP", () => {
 
     it("403s a member trying to change who has access", async () => {
         as("member-1", "member@firm.example");
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/projects/proj-1/access")
             .set(...AUTH)
             .send({ email: "counsel@outside.example", role: "viewer" });
@@ -728,12 +732,12 @@ describe("project organization overrides over HTTP", () => {
     });
 
     it("lists explicit organization overrides for an owner", async () => {
-        await request(app)
+        await sharedHttpClient.request()
             .post("/projects/proj-1/access")
             .set(...AUTH)
             .send({ email: "member@firm.example", role: "viewer" });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .get("/projects/proj-1/access")
             .set(...AUTH);
         expect(res.status).toBe(200);
@@ -756,7 +760,7 @@ describe("project organization overrides over HTTP", () => {
         // let a single read-only grant — the outside-counsel tier —
         // enumerate the whole team on a matter.
         as("member-1", "member@firm.example");
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .get("/projects/proj-1/access")
             .set(...AUTH);
         expect(res.status).toBe(403);
@@ -767,13 +771,13 @@ describe("project organization overrides over HTTP", () => {
     });
 
     it("shows organization members and their effective roles", async () => {
-        await request(app)
+        await sharedHttpClient.request()
             .post("/projects/proj-1/access")
             .set(...AUTH)
             .send({ email: "member@firm.example", role: "viewer" });
 
         as("member-1", "member@firm.example");
-        const memberView = await request(app)
+        const memberView = await sharedHttpClient.request()
             .get("/projects/proj-1/people")
             .set(...AUTH);
         expect(memberView.status).toBe(200);
@@ -786,25 +790,25 @@ describe("project organization overrides over HTTP", () => {
     });
 
     it("removes an override, restoring the member's organization default", async () => {
-        await request(app)
+        await sharedHttpClient.request()
             .post("/projects/proj-1/access")
             .set(...AUTH)
             .send({ email: "member@firm.example", role: "viewer" });
 
-        const gone = await request(app)
+        const gone = await sharedHttpClient.request()
             .delete("/projects/proj-1/access/member%40firm.example")
             .set(...AUTH);
         expect(gone.status).toBe(204);
         expect(tables.project_org_access_overrides).toHaveLength(0);
 
-        const missing = await request(app)
+        const missing = await sharedHttpClient.request()
             .delete("/projects/proj-1/access/ghost%40outside.example")
             .set(...AUTH);
         expect(missing.status).toBe(404);
     });
 
     it("does not let a direct grant cross into an organization project", async () => {
-        const grant = await request(app)
+        const grant = await sharedHttpClient.request()
             .post("/projects/proj-1/access")
             .set(...AUTH)
             .send({ email: "counsel@outside.example", role: "owner" });
@@ -812,7 +816,7 @@ describe("project organization overrides over HTTP", () => {
         expect(tables.project_access_grants).toHaveLength(0);
 
         as("outsider", "counsel@outside.example");
-        const res = await request(app).get("/projects/proj-1").set(...AUTH);
+        const res = await sharedHttpClient.request().get("/projects/proj-1").set(...AUTH);
         expect(res.status).toBe(404);
     });
 });
@@ -824,7 +828,7 @@ describe("project organization overrides over HTTP", () => {
 describe("GET /projects/:projectId admin contacts", () => {
     it("names the creator and the org's admins so a refusal can say who to ask", async () => {
         as("member-1", "member@firm.example");
-        const res = await request(app).get("/projects/proj-1").set(...AUTH);
+        const res = await sharedHttpClient.request().get("/projects/proj-1").set(...AUTH);
         expect(res.status).toBe(200);
         // owner_email was declared on this shape for a long time and always
         // came back null, so the UI's "ask …" line could never render.
@@ -860,7 +864,7 @@ describe("sendOrgFailure db_error", () => {
                 "DETAIL: Key (org_id, email)=(org-1, partner@firm.example) already exists.",
         };
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .patch("/orgs/org-1")
             .set(...AUTH)
             .send({ name: "Acme Renamed" });
@@ -891,7 +895,7 @@ describe("sendOrgFailure db_error", () => {
         as("admin-1", "admin@firm.example");
         // The last-admin invariant is a decision, not an incident: the caller
         // caused it and needs to be told what it was.
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete("/orgs/org-1/members/admin-1")
             .set(...AUTH);
         expect(res.status).toBe(409);

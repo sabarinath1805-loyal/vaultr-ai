@@ -7,8 +7,8 @@
 //
 // These tests drive the real routers and assert what reaches reportError.
 import express from "express";
-import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll, afterAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 
 const { reportError, rpc, from } = vi.hoisted(() => ({
   reportError: vi.fn((_error: unknown, _context?: unknown) => "event-1"),
@@ -40,6 +40,8 @@ import { quickActionsRouter } from "../../modules/quick-actions/quickActions.rou
 import { workflowAddonsRouter } from "../../modules/workflows/workflowAddons.routes";
 import { diagnosticErrorTags } from "../../lib/observability/sentryPrivacy";
 
+
+
 // What PostgREST answers for a table that the database does not have (a
 // self-hosted install whose schema is behind the code).
 const missingTable = {
@@ -63,6 +65,10 @@ function failingQuery(error: unknown) {
 }
 
 const app = express();
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 app.use((_req, res, next) => {
   res.locals.requestId = "7db9e42e-81ba-4b63-be51-4b6bb00e1866";
   next();
@@ -90,7 +96,7 @@ describe("a PostgREST error returned by a list service", () => {
     async (path, serviceFile) => {
       from.mockImplementation(() => failingQuery(missingTable));
 
-      const res = await request(app).get(path);
+      const res = await sharedHttpClient.request().get(path);
 
       // Client contract unchanged: generic body, request id, nothing raw.
       expect(res.status).toBe(500);

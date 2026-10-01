@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import request from "supertest";
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 import { streamAiSdk } from "../../lib/llm/aiSdk";
 import {
     callStep,
@@ -14,8 +14,18 @@ import type { AssistantEvent } from "@mike/contracts";
 // 30-requests-per-window budget, so the last describe began answering 429
 // before any permission check ran. Hoisted so it precedes app.ts's limiter
 // construction; scoped to tests — production reads its own env.
-vi.hoisted(() => {
+const originalChatRateLimitMax = vi.hoisted(() => {
+    const original = process.env.RATE_LIMIT_CHAT_MAX;
     process.env.RATE_LIMIT_CHAT_MAX = "1000";
+    return original;
+});
+
+afterAll(() => {
+    if (originalChatRateLimitMax === undefined) {
+        delete process.env.RATE_LIMIT_CHAT_MAX;
+    } else {
+        process.env.RATE_LIMIT_CHAT_MAX = originalChatRateLimitMax;
+    }
 });
 
 // Hoisted mock fn so the vi.mock factory below (which is itself hoisted above
@@ -417,6 +427,10 @@ vi.mock("../../lib/llm", async (importOriginal) => {
 import { app } from "../../app";
 import { createServerSupabase } from "../../lib/supabase";
 
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
+
 const VALID_BODY = {
     messages: [{ role: "user", content: "hello" }],
     model: "gemini-3-flash-preview",
@@ -468,7 +482,7 @@ describe("POST /chat — streaming endpoint", () => {
             };
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send(VALID_BODY);
@@ -564,7 +578,7 @@ describe("POST /chat — streaming endpoint", () => {
     dbControl.failUserMessageInsert = true;
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .post("/chat")
       .set("Authorization", "Bearer test")
       .send(VALID_BODY);
@@ -586,7 +600,7 @@ describe("POST /chat — streaming endpoint", () => {
     dbControl.failContentGrantLookup = true;
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .post("/chat")
       .set("Authorization", "Bearer test")
       .send({ ...VALID_BODY, chat_id: "chat-1" });
@@ -606,7 +620,7 @@ describe("POST /chat — streaming endpoint", () => {
     // checkpoint and there is no lease to release afterwards.
     beginMemoryConversationTurn.mockResolvedValueOnce(null);
 
-    const res = await request(app)
+    const res = await sharedHttpClient.request()
       .post("/chat")
       .set("Authorization", "Bearer test")
       .send(VALID_BODY);
@@ -620,7 +634,7 @@ describe("POST /chat — streaming endpoint", () => {
   });
 
     it("rejects a chat without an explicit model before streaming", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send({ messages: VALID_BODY.messages });
@@ -645,7 +659,7 @@ describe("POST /chat — streaming endpoint", () => {
             api_keys: { openai: "test-key" },
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send({ messages: VALID_BODY.messages });
@@ -671,7 +685,7 @@ describe("POST /chat — streaming endpoint", () => {
             citations: [],
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send(VALID_BODY);
@@ -703,7 +717,7 @@ describe("POST /chat — streaming endpoint", () => {
             ]);
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send(VALID_BODY);
@@ -737,7 +751,7 @@ describe("POST /chat — streaming endpoint", () => {
             );
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send(VALID_BODY);
@@ -773,7 +787,7 @@ describe("POST /chat — streaming endpoint", () => {
             },
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send(VALID_BODY);
@@ -846,7 +860,7 @@ describe("POST /chat — streaming endpoint", () => {
                 citations: [],
             });
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/chat")
                 .set("Authorization", "Bearer test")
                 .send(VALID_BODY);
@@ -889,7 +903,7 @@ describe("POST /chat — streaming endpoint", () => {
                 citations: [],
             });
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/chat")
                 .set("Authorization", "Bearer test")
                 .send(VALID_BODY);
@@ -933,7 +947,7 @@ describe("POST /chat — streaming endpoint", () => {
             dbControl.assistantMessageRows = [];
             await seedResolvableModel();
 
-            const first = await request(app)
+            const first = await sharedHttpClient.request()
                 .post("/chat")
                 .set("Authorization", "Bearer test")
                 .send({ ...VALID_BODY, model: "gpt-5.6-terra" });
@@ -959,7 +973,7 @@ describe("POST /chat — streaming endpoint", () => {
                 ).toContain("error");
             }
 
-            const loaded = await request(app)
+            const loaded = await sharedHttpClient.request()
                 .get("/chat/chat-1")
                 .set("Authorization", "Bearer test");
             expect(loaded.status).toBe(200);
@@ -993,7 +1007,7 @@ describe("POST /chat — streaming endpoint", () => {
                 realChat.enrichWithPriorEvents,
             );
             await seedResolvableModel();
-            const second = await request(app)
+            const second = await sharedHttpClient.request()
                 .post("/chat")
                 .set("Authorization", "Bearer test")
                 .send({
@@ -1055,7 +1069,7 @@ describe("POST /chat — streaming endpoint", () => {
 
     it("stores cloud Word chats only in the document-scoped Word tables", async () => {
         const chatLib = await import("../../modules/chat/engine/index.js");
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/word-chat")
             .set("Authorization", "Bearer test")
             .send({
@@ -1067,7 +1081,14 @@ describe("POST /chat — streaming endpoint", () => {
                 model: "gemini-3-flash-preview",
             });
 
-        expect(res.status).toBe(200);
+        expect(
+            res.status,
+            JSON.stringify({
+                status: res.status,
+                body: res.body,
+                headers: res.headers,
+            }),
+        ).toBe(200);
         expect(dbInserts.some(({ table }) => table === "chats")).toBe(false);
         expect(dbInserts.some(({ table }) => table === "chat_messages")).toBe(
             false,
@@ -1165,7 +1186,7 @@ describe("POST /chat — streaming endpoint", () => {
     ])(
         "rejects invalid Word-chat input before streaming",
         async (body, detail) => {
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/word-chat")
                 .set("Authorization", "Bearer test")
                 .send(body);
@@ -1178,7 +1199,7 @@ describe("POST /chat — streaming endpoint", () => {
     );
 
     it("rejects a Word chat without an explicit model before creating storage", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/word-chat")
             .set("Authorization", "Bearer test")
             .send({
@@ -1205,7 +1226,7 @@ describe("POST /chat — streaming endpoint", () => {
             api_keys: { openai: "test-key" },
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/word-chat")
             .set("Authorization", "Bearer test")
             .send({
@@ -1223,7 +1244,7 @@ describe("POST /chat — streaming endpoint", () => {
     it("rejects a resumed Word chat outside the scoped document and user", async () => {
         dbControl.wordChatMissing = true;
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/word-chat")
             .set("Authorization", "Bearer test")
             .send({
@@ -1242,7 +1263,7 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("streams local Word chats without inserting any chat rows", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/word-chat")
             .set("Authorization", "Bearer test")
             .send({
@@ -1280,7 +1301,7 @@ describe("POST /chat — streaming endpoint", () => {
         });
 
         let requestSettled = false;
-        const responsePromise = request(app)
+        const responsePromise = sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send(VALID_BODY)
@@ -1310,7 +1331,7 @@ describe("POST /chat — streaming endpoint", () => {
     it("retries a failed terminal assistant update up to success", async () => {
         dbControl.terminalUpdateFailures = 2;
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send(VALID_BODY);
@@ -1330,7 +1351,7 @@ describe("POST /chat — streaming endpoint", () => {
         dbControl.terminalUpdateFailures = 3;
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send(VALID_BODY);
@@ -1361,7 +1382,7 @@ describe("POST /chat — streaming endpoint", () => {
         dbControl.failAssistantReservation = true;
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send(VALID_BODY);
@@ -1392,7 +1413,7 @@ describe("POST /chat — streaming endpoint", () => {
     it("surfaces a stream failure as an in-stream error event, not an HTTP error", async () => {
         runLLMStream.mockRejectedValue(new Error("upstream LLM failure"));
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send(VALID_BODY);
@@ -1444,7 +1465,7 @@ describe("POST /chat — streaming endpoint", () => {
             ]),
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send(VALID_BODY);
@@ -1508,7 +1529,7 @@ describe("POST /chat — streaming endpoint", () => {
         created_at: "2026-01-01T00:00:00Z",
       },
     ];
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send({
@@ -1586,7 +1607,7 @@ describe("POST /chat — streaming endpoint", () => {
             },
         ];
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send({
@@ -1626,7 +1647,7 @@ describe("POST /chat — streaming endpoint", () => {
   });
 
     it("returns 400 on an empty messages array (never starts a stream)", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send({ messages: [] });
@@ -1637,7 +1658,7 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("returns 400 when messages is missing entirely", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send({});
@@ -1647,7 +1668,7 @@ describe("POST /chat — streaming endpoint", () => {
     });
 
     it("returns 400 when chat_id is not a non-empty string", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send({ ...VALID_BODY, chat_id: "   " });
@@ -1676,7 +1697,7 @@ describe("POST /chat — streaming endpoint", () => {
   ])(
         "shares strict request validation with project chat",
         async (body, detail) => {
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/chat")
                 .set("Authorization", "Bearer test")
                 .send(body);
@@ -1688,7 +1709,7 @@ describe("POST /chat — streaming endpoint", () => {
     );
 
     it("returns 400 from the Word route when document_context is not a string", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/word-chat")
             .set("Authorization", "Bearer test")
             .send({
@@ -1704,7 +1725,7 @@ describe("POST /chat — streaming endpoint", () => {
 
     it("makes document_context tool-readable without adding it to the system prompt", async () => {
         const chatLib = await import("../../modules/chat/engine/index.js");
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/word-chat")
             .set("Authorization", "Bearer test")
             .send({
@@ -1753,7 +1774,7 @@ describe("POST /chat — streaming endpoint", () => {
             },
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/word-chat")
             .set("Authorization", "Bearer test")
             .send({
@@ -1783,7 +1804,7 @@ describe("PATCH /chat/:chatId", () => {
     });
 
     it("returns 400 when no supported update is provided", async () => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .patch("/chat/chat-1")
             .set("Authorization", "Bearer test")
             .send({});
@@ -1794,7 +1815,7 @@ describe("PATCH /chat/:chatId", () => {
 
     it("updates the chat and profile when a model is selected", async () => {
         const userSettings = await import("../../modules/user/user.settings.js");
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .patch("/chat/chat-1")
             .set("Authorization", "Bearer test")
             .send({ model: "gemini-3-flash-preview" });
@@ -1814,7 +1835,7 @@ describe("PATCH /chat/:chatId", () => {
 
     it("updates the chat and profile when reasoning is selected", async () => {
         const userSettings = await import("../../modules/user/user.settings.js");
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .patch("/chat/chat-1")
             .set("Authorization", "Bearer test")
             .send({ reasoningLevel: "xhigh" });
@@ -1844,7 +1865,7 @@ describe("PATCH /word-chat/:chatId/model", () => {
         const userSettings = await import("../../modules/user/user.settings.js");
         const chatId = "6f783e59-35c4-4ddc-896a-94aa4d05a768";
         const documentId = "6f783e59-35c4-4ddc-896a-94aa4d05a767";
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .patch(`/word-chat/${chatId}/model`)
             .query({ document_id: documentId })
             .set("Authorization", "Bearer test")
@@ -1889,7 +1910,7 @@ describe("PATCH /word-chat/:chatId/model", () => {
             "shared_with is no longer supported; use the chat access endpoints.",
         ],
     ])("returns 400 for a malformed body: %j", async (body, detail) => {
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .patch("/chat/chat-1")
             .set("Authorization", "Bearer test")
             .send(body);
@@ -2149,7 +2170,7 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
             }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send({ ...VALID_BODY, chat_id: "chat-1" });
@@ -2169,7 +2190,7 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
             }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat/chat-1/generate-title")
             .set("Authorization", "Bearer test")
             .send({ message: "hello there" });
@@ -2190,7 +2211,7 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
                 }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat/create")
             .set("Authorization", "Bearer test")
             .send({ project_id: "proj-1" });
@@ -2211,7 +2232,7 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
                 }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat/create")
             .set("Authorization", "Bearer test")
             .send({ project_id: "proj-1" });
@@ -2223,7 +2244,7 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
     it("does not elevate a project chat's creator above project access", async () => {
         mockedCreate.mockImplementation(() => makeRbacDb(null, "u1") as never);
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send({ ...VALID_BODY, chat_id: "chat-1" });
@@ -2235,7 +2256,7 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
     it("still lets an org admin POST to a colleague's chat", async () => {
         mockedCreate.mockImplementation(() => makeRbacDb("admin") as never);
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send({ ...VALID_BODY, chat_id: "chat-1" });
@@ -2248,7 +2269,7 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
         await seedResolvableModel();
         mockedCreate.mockImplementation(() => makeRbacDb("admin") as never);
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat/chat-1/generate-title")
             .set("Authorization", "Bearer test")
             .send({ message: "hello there" });
@@ -2269,7 +2290,7 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
                 }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat/chat-1/generate-title")
             .set("Authorization", "Bearer test")
             .send({ message: "hello there" });
@@ -2288,7 +2309,7 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
                 }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .get("/chat/chat-1")
             .set("Authorization", "Bearer test");
 
@@ -2316,7 +2337,7 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
                 }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send({ ...VALID_BODY, chat_id: "chat-1" });
@@ -2328,7 +2349,7 @@ describe("chat writes are gated on content.edit (org RBAC)", () => {
     it("offers them to a project member, unchanged", async () => {
         mockedCreate.mockImplementation(() => makeRbacDb("member") as never);
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat")
             .set("Authorization", "Bearer test")
             .send({ ...VALID_BODY, chat_id: "chat-1" });
@@ -2366,7 +2387,7 @@ describe("chat grants, deletion and roster", () => {
     it("lets an org admin rename a colleague's chat", async () => {
         mockedCreate.mockImplementation(() => makeRbacDb("admin") as never);
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .patch("/chat/chat-1")
             .set("Authorization", "Bearer test")
             .send({ title: "  Renamed  " });
@@ -2393,7 +2414,7 @@ describe("chat grants, deletion and roster", () => {
                 }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .patch("/chat/chat-1")
             .set("Authorization", "Bearer test")
             .send({ title: "Renamed" });
@@ -2414,7 +2435,7 @@ describe("chat grants, deletion and roster", () => {
                 }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .patch("/chat/chat-1")
             .set("Authorization", "Bearer test")
             .send({ title: "Renamed" });
@@ -2457,7 +2478,7 @@ describe("chat grants, deletion and roster", () => {
                 }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat/chat-1/access")
             .set("Authorization", "Bearer test")
             .send({ email: " Mate@Example.com ", role: "viewer" });
@@ -2520,7 +2541,7 @@ describe("chat grants, deletion and roster", () => {
             return db as never;
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat/chat-1/access")
             .set("Authorization", "Bearer test")
             .send({ email: "mate@example.com", role: "viewer" });
@@ -2562,7 +2583,7 @@ describe("chat grants, deletion and roster", () => {
                 }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat/chat-1/access")
             .set("Authorization", "Bearer test")
             .send({ email: "future@example.com", role: "viewer" });
@@ -2598,7 +2619,7 @@ describe("chat grants, deletion and roster", () => {
                 }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat/chat-1/access")
             .set("Authorization", "Bearer test")
             .send({ email: "Colleague@Example.com", role: "viewer" });
@@ -2710,7 +2731,7 @@ describe("chat grants, deletion and roster", () => {
             return db as never;
         });
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat/chat-1/access")
             .set("Authorization", "Bearer test")
             .send({ email: "mate@example.com", role: "viewer" });
@@ -2734,7 +2755,7 @@ describe("chat grants, deletion and roster", () => {
                 }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat/chat-1/access")
             .set("Authorization", "Bearer test")
             .send({ email: "mate@example.com", role: "editor" });
@@ -2753,7 +2774,7 @@ describe("chat grants, deletion and roster", () => {
                 }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat/chat-1/access")
             .set("Authorization", "Bearer test")
             .send({ email: "U1@Test.Local", role: "editor" });
@@ -2770,7 +2791,7 @@ describe("chat grants, deletion and roster", () => {
                 }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .post("/chat/chat-1/access")
             .set("Authorization", "Bearer test")
             .send({ email: "ghost@example.com", role: "manager" });
@@ -2787,7 +2808,7 @@ describe("chat grants, deletion and roster", () => {
                 }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete("/chat/chat-1")
             .set("Authorization", "Bearer test");
 
@@ -2802,7 +2823,7 @@ describe("chat grants, deletion and roster", () => {
         // and rename it, but erasing a colleague's container is not theirs.
         mockedCreate.mockImplementation(() => makeRbacDb("member") as never);
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete("/chat/chat-1")
             .set("Authorization", "Bearer test");
 
@@ -2819,7 +2840,7 @@ describe("chat grants, deletion and roster", () => {
         // meaningfully restrained from deleting one chat inside it.
         mockedCreate.mockImplementation(() => makeRbacDb("admin") as never);
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete("/chat/chat-1")
             .set("Authorization", "Bearer test");
 
@@ -2832,7 +2853,7 @@ describe("chat grants, deletion and roster", () => {
     it("404s a delete from someone with no access at all", async () => {
         mockedCreate.mockImplementation(() => makeRbacDb(null) as never);
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .delete("/chat/chat-1")
             .set("Authorization", "Bearer test");
 
@@ -2851,7 +2872,7 @@ describe("chat grants, deletion and roster", () => {
                 }) as never,
         );
 
-        const viewer = await request(app)
+        const viewer = await sharedHttpClient.request()
             .get("/chat/chat-1")
             .set("Authorization", "Bearer test");
 
@@ -2862,7 +2883,7 @@ describe("chat grants, deletion and roster", () => {
 
         mockedCreate.mockImplementation(() => makeRbacDb("member") as never);
 
-        const member = await request(app)
+        const member = await sharedHttpClient.request()
             .get("/chat/chat-1")
             .set("Authorization", "Bearer test");
 
@@ -2877,7 +2898,7 @@ describe("chat grants, deletion and roster", () => {
                 }) as never,
         );
 
-        const creator = await request(app)
+        const creator = await sharedHttpClient.request()
             .get("/chat/chat-1")
             .set("Authorization", "Bearer test");
 
@@ -2932,7 +2953,7 @@ describe("chat grants, deletion and roster", () => {
                 }) as never,
         );
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .get("/chat/chat-1/people")
             .set("Authorization", "Bearer test");
 
@@ -2962,7 +2983,7 @@ describe("chat grants, deletion and roster", () => {
     it("404s the people roster for a caller with no access", async () => {
         mockedCreate.mockImplementation(() => makeRbacDb(null) as never);
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .get("/chat/chat-1/people")
             .set("Authorization", "Bearer test");
 
@@ -2974,7 +2995,7 @@ describe("chat grants, deletion and roster", () => {
         // The RPC's direct-grant arm compares against a lowercased email.
         mockedCreate.mockImplementation(() => makeRbacDb("member") as never);
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .get("/chat")
             .set("Authorization", "Bearer test");
 
@@ -2997,7 +3018,7 @@ describe("chat grants, deletion and roster", () => {
     it("passes a validated activity cursor to get_chats_overview", async () => {
         mockedCreate.mockImplementation(() => makeRbacDb("member") as never);
 
-        const res = await request(app)
+        const res = await sharedHttpClient.request()
             .get(
                 "/chat?before_updated_at=2026-09-21T12%3A00%3A00.000Z&before_id=6f783e59-35c4-4ddc-896a-94aa4d05a768",
             )
@@ -3013,10 +3034,10 @@ describe("chat grants, deletion and roster", () => {
     it("rejects incomplete or malformed activity cursors", async () => {
         mockedCreate.mockImplementation(() => makeRbacDb("member") as never);
 
-        const incomplete = await request(app)
+        const incomplete = await sharedHttpClient.request()
             .get("/chat?before_updated_at=2026-09-21T12%3A00%3A00.000Z")
             .set("Authorization", "Bearer test");
-        const malformed = await request(app)
+        const malformed = await sharedHttpClient.request()
             .get("/chat?before_updated_at=not-a-date&before_id=not-a-uuid")
             .set("Authorization", "Bearer test");
 
@@ -3041,7 +3062,7 @@ describe("chat grants, deletion and roster", () => {
         it("reads as a member", async () => {
             mockedCreate.mockImplementation(directShare);
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .get("/chat/chat-1")
                 .set("Authorization", "Bearer test");
 
@@ -3054,7 +3075,7 @@ describe("chat grants, deletion and roster", () => {
             await seedResolvableModel();
             mockedCreate.mockImplementation(directShare);
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/chat/chat-1/generate-title")
                 .set("Authorization", "Bearer test")
                 .send({ message: "hello there" });
@@ -3066,7 +3087,7 @@ describe("chat grants, deletion and roster", () => {
         it("marks a collaborator's generated turn as shared memory context", async () => {
             mockedCreate.mockImplementation(directShare);
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .post("/chat")
                 .set("Authorization", "Bearer test")
                 .send({ ...VALID_BODY, chat_id: "chat-1" });
@@ -3080,7 +3101,7 @@ describe("chat grants, deletion and roster", () => {
         it("may not delete the chat (container.delete)", async () => {
             mockedCreate.mockImplementation(directShare);
 
-            const res = await request(app)
+            const res = await sharedHttpClient.request()
                 .delete("/chat/chat-1")
                 .set("Authorization", "Bearer test");
 

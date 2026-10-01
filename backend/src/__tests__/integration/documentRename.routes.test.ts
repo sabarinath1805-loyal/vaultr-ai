@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import request from "supertest";
+import { beforeEach, describe, expect, it, vi, beforeAll, afterAll } from "vitest";
+import { createSupertestClient } from "../helpers/supertestClient";
 import type { Db } from "../../lib/supabase";
 import { scriptedDb } from "../helpers/scriptedDb";
 const state = vi.hoisted(() => ({
@@ -16,6 +16,10 @@ vi.mock("../../lib/access", async (original) => ({
   checkProjectAccess: state.access,
 }));
 import { app } from "../../app";
+
+const sharedHttpClient = createSupertestClient(app);
+beforeAll(sharedHttpClient.start);
+afterAll(sharedHttpClient.close);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -74,7 +78,7 @@ describe.each(paths)("rename response compatibility: %s", (path) => {
         : []),
     ]);
     state.db = fake.db;
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .patch(path)
       .set("Authorization", "Bearer test")
       .send({ filename: "new" });
@@ -90,7 +94,7 @@ describe.each(paths)("rename response compatibility: %s", (path) => {
   it("returns 404 for an absent or inaccessible scoped document", async () => {
     const fake = scriptedDb([{ table: "documents", data: null }]);
     state.db = fake.db;
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .patch(path)
       .set("Authorization", "Bearer test")
       .send({ filename: "new" });
@@ -104,7 +108,7 @@ describe.each(paths)("rename response compatibility: %s", (path) => {
       { table: "document_versions", data: { filename: "old.pdf" } },
     ]);
     state.db = fake.db;
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .patch(path)
       .set("Authorization", "Bearer test")
       .send({ filename: " " });
@@ -124,11 +128,18 @@ describe.each(paths)("rename response compatibility: %s", (path) => {
       },
     ]);
     state.db = fake.db;
-    const response = await request(app)
+    const response = await sharedHttpClient.request()
       .patch(path)
       .set("Authorization", "Bearer test")
       .send({ filename: "new" });
-    expect(response.status).toBe(500);
+    expect(
+      response.status,
+      JSON.stringify({
+        status: response.status,
+        body: response.body,
+        headers: response.headers,
+      }),
+    ).toBe(500);
     expect(response.body).toMatchObject({
       code: "internal_error",
       detail: "Something went wrong. Please try again.",
@@ -146,7 +157,7 @@ it("refuses a viewer's project rename by name, not as a missing project", async 
   state.access.mockResolvedValue({ ok: true, projectRole: "viewer" });
   const fake = scriptedDb([]);
   state.db = fake.db;
-  const response = await request(app)
+  const response = await sharedHttpClient.request()
     .patch(paths[0])
     .set("Authorization", "Bearer test")
     .send({ filename: "new" });
@@ -161,7 +172,7 @@ it("keeps 404 when the caller has no project access at all", async () => {
   state.access.mockResolvedValue({ ok: false });
   const fake = scriptedDb([]);
   state.db = fake.db;
-  const response = await request(app)
+  const response = await sharedHttpClient.request()
     .patch(paths[0])
     .set("Authorization", "Bearer test")
     .send({ filename: "new" });
