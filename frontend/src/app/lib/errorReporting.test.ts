@@ -34,17 +34,18 @@ vi.mock("@sentry/nextjs", () => ({
 }));
 
 import * as Sentry from "@sentry/nextjs";
+import { diagnosticEvent } from "@/shared/lib/sentryPrivacy";
 import {
     browserSentryOptions,
     reportApiFailure,
     reportError,
     scrubEvent,
     serverSentryOptions,
+    initializeSentryIfEnabled,
     setReportingUser,
     reportNetworkFailure,
     trackPendingRequest,
 } from "./errorReporting";
-import { MIKE_SENTRY_DSN } from "@/shared/lib/sentryEvent";
 
 afterEach(() => {
     state.enabled = false;
@@ -173,10 +174,10 @@ describe("setReportingUser", () => {
 });
 
 describe("browserSentryOptions", () => {
-    it("is ON BY DEFAULT with the Mike project DSN and never turns on PII or replay", () => {
+    it("is off by default and never turns on PII or replay", () => {
         const options = browserSentryOptions({ nodeEnv: "test" });
-        expect(options.enabled).toBe(true);
-        expect(options.dsn).toBe(MIKE_SENTRY_DSN.frontend);
+        expect(options.enabled).toBe(false);
+        expect(options.dsn).toBeUndefined();
         expect(options.environment).toBe("self-hosted");
         expect(options.release).toBeUndefined();
         expect(options.sendDefaultPii).toBe(false);
@@ -264,13 +265,13 @@ describe("serverSentryOptions", () => {
         expect(options.beforeSend).toBe(scrubEvent);
     });
 
-    it("is ON BY DEFAULT without config, off with SENTRY_DISABLED, official only when marked", () => {
+    it("is off without config, stays off with SENTRY_DISABLED, and marks the official deployment", () => {
         const options = serverSentryOptions(
             "server",
             {} as unknown as NodeJS.ProcessEnv,
         );
-        expect(options.enabled).toBe(true);
-        expect(options.dsn).toBe(MIKE_SENTRY_DSN.frontend);
+        expect(options.enabled).toBe(false);
+        expect(options.dsn).toBeUndefined();
         expect(options.release).toBeUndefined();
         expect(options.environment).toBe("self-hosted");
         const withNodeEnv = serverSentryOptions("server", {
@@ -286,6 +287,39 @@ describe("serverSentryOptions", () => {
         } as unknown as NodeJS.ProcessEnv);
         expect((official.initialScope as { tags: { install: string } }).tags.install).toBe("official");
     });
+});
+
+describe("initializeSentryIfEnabled", () => {
+    it("does not initialize without an explicit DSN and initializes with the scrubber when configured", () => {
+        const initialize = vi.fn();
+        const off = browserSentryOptions({});
+        expect(initializeSentryIfEnabled(off, initialize)).toBe(false);
+        expect(initialize).not.toHaveBeenCalled();
+
+        const on = browserSentryOptions({ dsn: "https://synthetic@telemetry.example/1" });
+        expect(initializeSentryIfEnabled(on, initialize)).toBe(true);
+        expect(initialize).toHaveBeenCalledWith(on);
+        expect(on.beforeSend).toBe(scrubEvent);
+    });
+});
+
+it("scrubs synthetic prompt, document text, headers and URL credentials before telemetry", () => {
+    const preTransport = scrubEvent({
+        message: "Synthetic prompt content: SYNTHETIC_PROMPT_SENTINEL",
+        request: {
+            url: "/api/chat?access_token=SYNTHETIC_URL_TOKEN",
+            headers: { Authorization: "Bearer SYNTHETIC_AUTH_TOKEN" },
+            data: "SYNTHETIC_DOCUMENT_BODY",
+        },
+        extra: { prompt: "SYNTHETIC_PROMPT_SENTINEL", document_text: "SYNTHETIC_DOCUMENT_BODY" },
+    });
+    const serialized = JSON.stringify(diagnosticEvent(preTransport));
+    for (const sensitive of [
+        "SYNTHETIC_PROMPT_SENTINEL",
+        "SYNTHETIC_DOCUMENT_BODY",
+        "SYNTHETIC_URL_TOKEN",
+        "SYNTHETIC_AUTH_TOKEN",
+    ]) expect(serialized).not.toContain(sensitive);
 });
 
 describe("reportNetworkFailure", () => {

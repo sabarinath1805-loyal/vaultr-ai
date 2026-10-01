@@ -3,9 +3,8 @@
 //
 // Design rules, in priority order:
 //
-//   1. ON BY DEFAULT for community installs; SENTRY_DISABLED=true opts out.
-//      An explicit DSN overrides Mike's project. Test processes stay disabled
-//      unless SENTRY_ALLOW_IN_TESTS=true is explicitly set.
+//   1. OFF BY DEFAULT; an operator-supplied SENTRY_DSN opts in. Test processes
+//      stay disabled unless SENTRY_ALLOW_IN_TESTS=true is explicitly set.
 //   2. NEVER LEAK DOCUMENT CONTENT OR CREDENTIALS. This is a legal platform:
 //      request bodies carry privileged documents and chat transcripts, and
 //      headers carry session cookies. `beforeSend` strips request bodies,
@@ -263,44 +262,26 @@ export function redactShaped(value: unknown, depth = 0): unknown {
   return value;
 }
 
-/**
- * The Mike project's own Sentry projects. A DSN is a write-only address:
- * it lets an SDK post events and nothing else, so it is public by design
- * (it ships in every browser bundle). Community installs report here by
- * default so the project learns what forks run into; the opt-out and the
- * override are one variable each (see resolveDsn).
- */
-export const MIKE_SENTRY_DSN = {
-  backend:
-    "https://c755fbcd344e1d4ac0dfc3b3c927b938@o4512103319207936.ingest.us.sentry.io/4512103323074560",
-  frontend:
-    "https://b5a10f7549e6bd0165d4e01d67e762cd@o4512103319207936.ingest.us.sentry.io/4512103326416896",
-  wordAddin:
-    "https://dcb3daf9d26bb576e94da2c584de63e8@o4512103319207936.ingest.us.sentry.io/4512103330349056",
-} as const;
-
 export type DsnResolution = {
   dsn: string;
-  /** Where the DSN came from; "default" means the Mike project's Sentry. */
-  source: "disabled" | "env" | "default";
+  /** An unset DSN is deliberately different from an explicit disable flag. */
+  source: "disabled" | "env" | "unset";
 };
 
 /**
- * Off if the runtime's *_SENTRY_DISABLED is "true"; the runtime's own DSN
- * when one is set (a self-hoster's own Sentry); otherwise the built-in Mike
- * project DSN. Test processes are guarded separately by the caller.
+ * Telemetry is opt-in: a runtime-specific explicit DSN enables it, while an
+ * absent DSN stays off. The explicit disable flag takes precedence.
  */
 export function resolveDsn(input: {
   disabled?: string;
   dsn?: string;
-  fallback: string;
 }): DsnResolution {
   if (input.disabled?.trim().toLowerCase() === "true") {
     return { dsn: "", source: "disabled" };
   }
   const explicit = input.dsn?.trim();
   if (explicit) return { dsn: explicit, source: "env" };
-  return { dsn: input.fallback, source: "default" };
+  return { dsn: "", source: "unset" };
 }
 
 export type InstallKind = "official" | "community";
@@ -529,13 +510,10 @@ function parseRate(raw: string | undefined, fallback: number): number {
 }
 
 export function sentryConfiguration(env: NodeJS.ProcessEnv = process.env) {
-  // ON BY DEFAULT: without SENTRY_DISABLED or a DSN of your own, errors go
-  // to the Mike project's Sentry as a community install (see the README's
-  // Telemetry section). Only Mike's own deployment sets SENTRY_INSTALL.
+  // Off until an operator provides an explicit SENTRY_DSN.
   const resolved = resolveDsn({
     disabled: env.SENTRY_DISABLED,
     dsn: env.SENTRY_DSN,
-    fallback: MIKE_SENTRY_DSN.backend,
   });
   const dsn = resolved.dsn;
   // A test process must never report, even when a developer's backend/.env
@@ -805,7 +783,11 @@ export function initSentry(
     if (env.NODE_ENV !== "test") {
       console.log(
         `[sentry] disabled for ${role} (${
-          config.dsnSource === "disabled" ? "SENTRY_DISABLED=true" : "test process"
+          config.dsnSource === "disabled"
+            ? "SENTRY_DISABLED=true"
+            : config.dsnSource === "unset"
+              ? "no SENTRY_DSN configured"
+              : "test process"
         })`,
       );
     }
@@ -842,17 +824,10 @@ export function initSentry(
     beforeSend: scrubEvent,
   });
   initialized = true;
-  if (config.dsnSource === "default") {
-    console.log(
-      `[sentry] enabled for ${role} → Mike project Sentry (${config.install} install). ` +
-        "Opt out with SENTRY_DISABLED=true or point SENTRY_DSN at your own project.",
-    );
-  } else {
-    console.log(
-      `[sentry] enabled for ${role} (environment ${config.environment}` +
-        `${config.release ? `, release ${config.release}` : ""})`,
-    );
-  }
+  console.log(
+    `[sentry] enabled for ${role} (environment ${config.environment}` +
+      `${config.release ? `, release ${config.release}` : ""})`,
+  );
   return true;
 }
 

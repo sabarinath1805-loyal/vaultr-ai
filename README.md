@@ -58,8 +58,8 @@ authentication behavior, Ollama setup, and first-run guidance.
 
 ### Telemetry
 
-Error reports are sent to the Mike project's own Sentry by default, so the
-maintainers can fix failures encountered by forks and self-hosted installs.
+Error reporting is off by default. Operators can opt in by configuring a
+runtime-specific Sentry DSN; blank or unset DSNs keep deployments offline.
 Before network transmission, every runtime rebuilds reports from an explicit
 allowlist: code locations and line numbers, controlled operation labels,
 HTTP method/status and normalized routes, validated correlation IDs, release,
@@ -69,14 +69,14 @@ breadcrumbs are excluded. Automatic sessions, replay, attachments, traces,
 and other non-error payloads are blocked. The same boundary applies to
 community and official installations. See the [observability guide](docs/observability.md)
 for the exact policy, source-map behavior, and limitations.
-To opt out, set `SENTRY_DISABLED=true`
+To keep reporting off even when a DSN is configured, set `SENTRY_DISABLED=true`
 (`NEXT_PUBLIC_SENTRY_DISABLED=true` / `REACT_APP_SENTRY_DISABLED=true` for the
 browser and add-in builds); to use your own Sentry instead, set the matching
 `*_SENTRY_DSN`.
 
-The built-in DSNs are public submission addresses; stored error reports are
+Configured DSNs are public submission addresses; stored error reports are
 accessible to authorized Sentry organization members. The guide documents
-[public-DSN and default-on precedents](docs/observability.md#public-dsns-and-default-on-reporting)
+[public-DSN and opt-in policy](docs/observability.md#public-dsns-and-opt-in-reporting)
 (Zulip Desktop, Element Web, and GitLab's distinct Service Ping mechanism),
 and [quota protections and remaining limits](docs/observability.md#quota-protection-and-its-limits).
 

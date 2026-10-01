@@ -10,13 +10,6 @@
             type="text/javascript"
             src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"
         ></script>
-        <!-- Match the web app's typography (next/font Inter + EB Garamond). -->
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-        <link
-            href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600;700&display=swap"
-            rel="stylesheet"
-        />
         <!-- No universal reset here: un-layered CSS outranks every @layer rule,
          so a `* { margin: 0; padding: 0 }` in this file overrides ALL Tailwind
          margin/padding utilities. Tailwind's preflight (in @layer base)

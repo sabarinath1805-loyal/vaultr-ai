@@ -3,7 +3,7 @@
 // file so the export handlers' mock
 // surface (which stubs storage wholesale) stays untouched.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 type TokenRow = {
     connector_id: string;
@@ -96,6 +96,7 @@ const tokenRow = (overrides: Partial<TokenRow> = {}): TokenRow => ({
 });
 
 beforeEach(() => {
+    vi.stubEnv("MCP_OAUTH_BACKGROUND_REFRESH_ENABLED", "true");
     loadOAuthToken.mockReset().mockResolvedValue(null);
     refreshOAuthAccessToken.mockReset().mockResolvedValue({});
     extractLegacyOfficeText
@@ -107,6 +108,10 @@ beforeEach(() => {
         .mockResolvedValue(
             new Uint8Array([0xd0, 0xcf, 0x11, 0xe0]).buffer as ArrayBuffer,
         );
+});
+
+afterEach(() => {
+    vi.unstubAllEnvs();
 });
 
 describe("registry", () => {
@@ -121,6 +126,17 @@ describe("registry", () => {
 });
 
 describe("handleMcpRefreshToken", () => {
+    it("does not run queued proactive refreshes unless explicitly enabled", async () => {
+        vi.stubEnv("MCP_OAUTH_BACKGROUND_REFRESH_ENABLED", "false");
+        loadOAuthToken.mockResolvedValue(tokenRow());
+        await handleMcpRefreshToken(
+            DB,
+            JOB("mcp.refresh_token", { connectorId: "c1" }),
+        );
+        expect(loadOAuthToken).not.toHaveBeenCalled();
+        expect(refreshOAuthAccessToken).not.toHaveBeenCalled();
+    });
+
     it("no-ops on a token that is not near expiry (idempotent re-run)", async () => {
         loadOAuthToken.mockResolvedValue(
             tokenRow({

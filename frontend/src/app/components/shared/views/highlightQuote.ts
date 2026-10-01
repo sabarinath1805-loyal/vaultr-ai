@@ -11,7 +11,7 @@ export async function getPdfJs() {
 }
 
 export const STANDARD_FONT_DATA_URL =
-    "https://unpkg.com/pdfjs-dist@4.10.38/standard_fonts/";
+    "/pdfjs-standard-fonts/";
 
 const HIGHLIGHT_CLASS = "pdf-text-highlight";
 const ORIGINAL_TEXT_ATTR = "data-original-text";

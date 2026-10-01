@@ -54,7 +54,6 @@ vi.mock("@sentry/node", () => ({
 import * as Sentry from "@sentry/node";
 import {
   bestEffort,
-  MIKE_SENTRY_DSN,
   flushSentry,
   initSentry,
   redactText,
@@ -87,11 +86,11 @@ afterEach(() => {
 });
 
 describe("sentryConfiguration", () => {
-  it("is ON BY DEFAULT: the Mike project DSN, a community install, environment self-hosted", () => {
+  it("is off by default until an operator configures an explicit DSN", () => {
     const config = sentryConfiguration({ NODE_ENV: "production" } as NodeJS.ProcessEnv);
-    expect(config.enabled).toBe(true);
-    expect(config.dsn).toBe(MIKE_SENTRY_DSN.backend);
-    expect(config.dsnSource).toBe("default");
+    expect(config.enabled).toBe(false);
+    expect(config.dsn).toBe("");
+    expect(config.dsnSource).toBe("unset");
     expect(config.install).toBe("community");
     // NODE_ENV no longer leaks into the environment tag: a fork's
     // "production" is not ours.

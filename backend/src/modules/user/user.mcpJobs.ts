@@ -1,6 +1,7 @@
 // mcpJobs — implementation behind the module facade.
 import { McpOAuthRequiredError, loadOAuthToken, refreshOAuthAccessToken } from "../../lib/mcp/oauth";
 import { type Db, type DbJob } from "../../lib/dbq/types";
+import { mcpOAuthBackgroundRefreshEnabled } from "../../lib/runtimeConfig";
 
 /**
  * Refresh an MCP OAuth access token that is about to expire.
@@ -15,6 +16,10 @@ export async function handleMcpRefreshToken(
     db: Db,
     job: DbJob,
 ): Promise<void> {
+    // Legacy queued refreshes are harmless when the proactive background
+    // feature is off. The user-initiated OAuth path still refreshes on use.
+    if (!mcpOAuthBackgroundRefreshEnabled()) return;
+
     const connectorId = job.payload.connectorId as string | undefined;
     if (!connectorId) return; // malformed payload — nothing to retry into
 

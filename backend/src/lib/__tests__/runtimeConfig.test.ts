@@ -12,6 +12,7 @@ import {
   streamCapacityConfiguration,
   queueCapacityConfiguration,
   uploadStorageQuotaConfiguration,
+  mcpOAuthBackgroundRefreshEnabled,
   spreadsheetParsingConfiguration,
   validateRuntimeConfiguration,
 } from "../runtimeConfig";
@@ -177,6 +178,14 @@ describe("upload-processing configuration", () => {
       concurrency: 64,
       maxRunningPerUser: 2,
     });
+  });
+});
+
+describe("MCP OAuth background refresh configuration", () => {
+  it("keeps proactive provider calls off unless explicitly enabled", () => {
+    expect(mcpOAuthBackgroundRefreshEnabled({})).toBe(false);
+    expect(mcpOAuthBackgroundRefreshEnabled({ MCP_OAUTH_BACKGROUND_REFRESH_ENABLED: "false" })).toBe(false);
+    expect(mcpOAuthBackgroundRefreshEnabled({ MCP_OAUTH_BACKGROUND_REFRESH_ENABLED: "true" })).toBe(true);
   });
 });
 

@@ -66,6 +66,13 @@ export function uploadProcessingConfiguration(
   };
 }
 
+/** Proactive OAuth token refresh can call the remote provider without a user request. */
+export function mcpOAuthBackgroundRefreshEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env.MCP_OAUTH_BACKGROUND_REFRESH_ENABLED === "true";
+}
+
 export function chatRequestLimits(env: NodeJS.ProcessEnv = process.env) {
   return {
     maxMessageChars: clamp(envInt("CHAT_MAX_MESSAGE_CHARS", 50_000, env), 1_000, 1_000_000),

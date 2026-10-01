@@ -248,44 +248,26 @@ export function redactShaped(value: unknown, depth = 0): unknown {
     return value;
 }
 
-/**
-  * The Mike project's own Sentry projects. A DSN is a write-only address:
-  * it lets an SDK post events and nothing else, so it is public by design
-  * (it ships in every browser bundle). Community installs report here by
-  * default so the project learns what forks run into; the opt-out and the
-  * override are one variable each (see resolveDsn).
-  */
-export const MIKE_SENTRY_DSN = {
-    backend:
-        "https://c755fbcd344e1d4ac0dfc3b3c927b938@o4512103319207936.ingest.us.sentry.io/4512103323074560",
-    frontend:
-        "https://b5a10f7549e6bd0165d4e01d67e762cd@o4512103319207936.ingest.us.sentry.io/4512103326416896",
-    wordAddin:
-        "https://dcb3daf9d26bb576e94da2c584de63e8@o4512103319207936.ingest.us.sentry.io/4512103330349056",
-} as const;
-
 export type DsnResolution = {
     dsn: string;
-    /** Where the DSN came from; "default" means the Mike project's Sentry. */
-    source: "disabled" | "env" | "default";
+    /** An unset DSN is deliberately different from an explicit disable flag. */
+    source: "disabled" | "env" | "unset";
 };
 
 /**
-  * Off if the runtime's *_SENTRY_DISABLED is "true"; the runtime's own DSN
-  * when one is set (a self-hoster's own Sentry); otherwise the built-in Mike
-  * project DSN. Test processes are guarded separately by the caller.
+  * Telemetry is opt-in: a runtime-specific explicit DSN enables it, while an
+  * absent DSN stays off. The explicit disable flag takes precedence.
   */
 export function resolveDsn(input: {
     disabled?: string;
     dsn?: string;
-    fallback: string;
 }): DsnResolution {
     if (input.disabled?.trim().toLowerCase() === "true") {
         return { dsn: "", source: "disabled" };
     }
     const explicit = input.dsn?.trim();
     if (explicit) return { dsn: explicit, source: "env" };
-    return { dsn: input.fallback, source: "default" };
+    return { dsn: "", source: "unset" };
 }
 
 export type InstallKind = "official" | "community";

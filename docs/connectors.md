@@ -31,6 +31,12 @@ If the deployment is not configured, Mike rejects the connector before saving
 it. The warning links to this guide rather than assuming a callback URI for the
 deployment.
 
+OAuth access tokens refresh on demand when a user invokes a connector.
+Proactive background refresh is off by default because it contacts the
+provider while the connector is idle. Operators may explicitly enable it with
+`MCP_OAUTH_BACKGROUND_REFRESH_ENABLED=true` in `backend/.env`; queued proactive
+refresh jobs are ignored while the setting is off.
+
 ## Redirect URIs
 
 MCP callback URIs are derived from `API_PUBLIC_URL`, which must be the

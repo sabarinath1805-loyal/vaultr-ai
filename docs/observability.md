@@ -11,8 +11,9 @@ Every Mike runtime can report unexpected failures to [Sentry](https://sentry.io)
 | Web app, Next.js server (the `/api` gateway) | `@sentry/nextjs` | `SENTRY_DSN` in the frontend's runtime environment |
 | Word add-in (task pane, ribbon commands, OAuth dialog) | `@sentry/react` | `REACT_APP_SENTRY_DSN` at **build** time |
 
-**On by default.** Error reports are sent to the Mike project's own Sentry by default, so the
-maintainers can fix failures encountered by forks and self-hosted installs.
+**Off by default.** A runtime sends error reports only when its operator
+supplies that runtime's explicit Sentry DSN. Empty or unset DSNs keep local
+and self-hosted deployments from contacting a telemetry service.
 Before network transmission, every runtime rebuilds reports from an explicit
 allowlist: code locations and line numbers, controlled operation labels,
 HTTP method/status and normalized routes, validated correlation IDs, release,
@@ -20,38 +21,33 @@ and environment. Client document filenames, document text, raw error and
 console messages, request URLs/queries/headers/bodies, user identities, and
 breadcrumbs are excluded. Automatic sessions, replay, attachments, traces,
 and other non-error payloads are blocked. The same boundary applies to
-community and official installations. See the [observability guide](observability.md)
-for the exact policy, source-map behavior, and limitations.
-To opt out, set `SENTRY_DISABLED=true`
-(`NEXT_PUBLIC_SENTRY_DISABLED=true` / `REACT_APP_SENTRY_DISABLED=true` for the
-browser and add-in builds); to use your own Sentry instead, set the matching
-`*_SENTRY_DSN`.
+community and official installations. Set a runtime-specific `*_SENTRY_DSN`
+to opt in; `*_SENTRY_DISABLED=true` takes precedence and keeps that runtime
+off.
 
 The [data audit](sentry-data-audit.md) preserves the earlier leak findings and
 records the final transport boundary that closes them. Internal source-code
 filenames identify the failing code; client document filenames are excluded.
 
 Resolution order, per runtime: `*_SENTRY_DISABLED=true` → off;
-`*_SENTRY_DSN` set → that DSN; otherwise the built-in Mike project DSN. Backend test
-processes (vitest, `NODE_ENV=test`) never report unless
+`*_SENTRY_DSN` set → that DSN; otherwise off. Backend test processes (vitest,
+`NODE_ENV=test`) never report unless
 `SENTRY_ALLOW_IN_TESTS=true`. Browser tests disable reporting or use intercepted
 transports. Every event carries `install=community` unless
 the deployment sets `SENTRY_INSTALL=official` (env, all three runtimes), and
 `environment` defaults to `self-hosted`, so the official deployment and the
-community are separable in Sentry. The boot log says which applies:
-`[sentry] enabled for api → Mike project Sentry (community install). Opt out
-with SENTRY_DISABLED=true or point SENTRY_DSN at your own project.`
+community are separable in Sentry. The boot log reports whether an explicit
+DSN enabled reporting or it remains unset/disabled.
 
-### Public DSNs and default-on reporting
+### Public DSNs and opt-in reporting
 
 **Public DSN does not mean public error reports.** A DSN lets an SDK submit
 events; it does not grant access to read stored events or administer the
-Sentry organization. Mike's default reports go to the maintainers' `mike-xp`
-organization. The source-map upload token (`SENTRY_AUTH_TOKEN`) is a separate,
+Sentry organization. The source-map upload token (`SENTRY_AUTH_TOKEN`) is a separate,
 privileged secret and must never appear in source or browser bundles. See
 [Sentry's explanation of public DSNs](https://www.sentry.help/en/articles/13964341-my-dsn-key-is-publicly-visible-is-this-a-security-vulnerability).
 
-There are established precedents, but publishing a DSN and choosing default-on
+There are established precedents, but publishing a DSN and choosing opt-in
 telemetry are separate decisions. These are applications, not a claim that
 installing their underlying libraries automatically reports to their authors:
 
@@ -61,9 +57,8 @@ installing their underlying libraries automatically reports to their authors:
 | [Element Web](https://github.com/element-hq/element-web/blob/5fc4f4090cea4357bf101e051e9864cde7610145/apps/web/element.io/develop/config.json) (AGPL/GPL options) | Publishes a Sentry DSN in its develop deployment configuration. Its [integration](https://github.com/element-hq/element-web/blob/5fc4f4090cea4357bf101e051e9864cde7610145/apps/web/src/sentry.ts) explicitly submits bug reports; this is not evidence of Mike's same automatic reporting policy. |
 | [GitLab Service Ping](https://docs.gitlab.com/development/internal_analytics/service_ping/) | Documents default-on telemetry sending a weekly usage payload to GitLab. This is a precedent for default-on usage reporting, not proof of default-on Sentry crash reporting from self-managed instances. GitLab's [Sentry setup](https://docs.gitlab.com/omnibus/settings/configuration/#error-reporting-and-logging-with-sentry) asks administrators to enable it and supply their own DSNs. |
 
-Mike's policy remains explicit: automatic error reporting is on by default,
-with the exclusions above, an opt-out, and an alternative destination under
-the operator's control. Other projects' choices do not imply identical data
+Mike's policy is explicit: automatic error reporting is off until the operator
+sets a destination, with the exclusions above. Other projects' choices do not imply identical data
 collection, privacy guarantees, or consent policies.
 
 ### Quota protection and its limits
@@ -259,8 +254,8 @@ add free-form text just to restore a more detailed exception message.
 Backend (`backend/.env`, read at process start):
 
 ```
-SENTRY_DISABLED=false                  # true = send nothing
-SENTRY_DSN=                            # your own Sentry; empty = Mike project Sentry
+SENTRY_DISABLED=false                  # true = send nothing even with a DSN
+SENTRY_DSN=                            # explicit opt-in; empty/unset = off
 SENTRY_INSTALL=                        # "official" only on Mike's own deployment
 SENTRY_ENVIRONMENT=production          # defaults to self-hosted
 SENTRY_RELEASE=mike@1.4.0              # optional; defaults to mike@<git sha>
@@ -277,13 +272,14 @@ Web app. The browser DSN is inlined by `next build`, so for the Docker image it
 is a build argument; the Next server reads its own DSN at runtime:
 
 ```
-# root .env (Docker Compose)
+# root .env (Docker Compose): the browser build DSN and server runtime DSN
+# each opt in their corresponding web runtime.
 FRONTEND_SENTRY_DSN=https://<key>@<org>.ingest.sentry.io/<project>
 SENTRY_ENVIRONMENT=production
 SENTRY_RELEASE=mike@1.4.0
 
 # or, building the frontend directly
-NEXT_PUBLIC_SENTRY_DISABLED=true       # browser opt-out (build time)
+NEXT_PUBLIC_SENTRY_DISABLED=true       # browser off switch (build time)
 NEXT_PUBLIC_SENTRY_INSTALL=official    # only on Mike's own deployment
 NEXT_PUBLIC_SENTRY_DSN=...             # browser (build time)
 NEXT_PUBLIC_SENTRY_ENVIRONMENT=...     # optional
@@ -311,7 +307,7 @@ Word add-in (build time, `word-addin/.env` or the Docker build arguments):
 
 ```
 REACT_APP_SENTRY_DISABLED=true         # opt-out
-REACT_APP_SENTRY_DSN=...               # your own Sentry; empty = Mike project Sentry
+REACT_APP_SENTRY_DSN=...               # explicit opt-in; empty/unset = off
 REACT_APP_SENTRY_ENVIRONMENT=...       # optional
 REACT_APP_SENTRY_RELEASE=...           # optional
 ```

@@ -23,7 +23,10 @@ import {
 import { enqueueDbJob } from "./lib/dbq/enqueue";
 import { runStaleWorkSweep } from "./jobs/staleWork";
 import { startUploadProcessingWorkers } from "./modules/uploads/uploads.service";
-import { uploadProcessingConfiguration } from "./lib/runtimeConfig";
+import {
+    mcpOAuthBackgroundRefreshEnabled,
+    uploadProcessingConfiguration,
+} from "./lib/runtimeConfig";
 import { createServerSupabase } from "./lib/supabase";
 import { reportError } from "./lib/observability/sentry";
 
@@ -132,8 +135,10 @@ export function startAllWorkers(): void {
             reportError(err, { tags: { component: "mcp-refresh-sweep" } });
             console.error("[mcp-refresh-sweep] failed", err);
         });
-    mcpRefreshTimer = setInterval(runMcpRefresh, MCP_REFRESH_SWEEP_INTERVAL_MS);
-    mcpRefreshTimer.unref();
+    if (mcpOAuthBackgroundRefreshEnabled()) {
+        mcpRefreshTimer = setInterval(runMcpRefresh, MCP_REFRESH_SWEEP_INTERVAL_MS);
+        mcpRefreshTimer.unref();
+    }
 }
 
 /** Stop everything gracefully; safe to call more than once. */

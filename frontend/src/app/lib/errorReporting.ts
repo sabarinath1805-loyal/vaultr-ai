@@ -8,7 +8,6 @@
 import * as Sentry from "@sentry/nextjs";
 import { privacyBoundaryIntegration } from "@/shared/lib/sentryPrivacy";
 import {
-    MIKE_SENTRY_DSN,
     createEventScrubber,
     installKind,
     normalizeApiPath,
@@ -238,12 +237,10 @@ export function browserSentryOptions(env: {
     tracesSampleRate?: string;
     nodeEnv?: string;
 }): Sentry.BrowserOptions {
-    // ON BY DEFAULT: the Mike project's own DSN unless NEXT_PUBLIC_SENTRY_DISABLED
-    // or a DSN of your own is baked in at build time (README, "Telemetry").
+    // Browser telemetry stays off until a deployment supplies its own DSN.
     const { dsn } = resolveDsn({
         disabled: env.disabled,
         dsn: env.dsn,
-        fallback: MIKE_SENTRY_DSN.frontend,
     });
     return {
         dsn: dsn || undefined,
@@ -269,6 +266,16 @@ export function browserSentryOptions(env: {
     };
 }
 
+/** Call the SDK only when telemetry has an explicit destination. */
+export function initializeSentryIfEnabled<T extends { enabled?: boolean; dsn?: string }>(
+    options: T,
+    initialize: (options: T) => void,
+): boolean {
+    if (!options.enabled || !options.dsn) return false;
+    initialize(options);
+    return true;
+}
+
 /** Server / edge SDK options; env is read at runtime on the Next server. */
 export function serverSentryOptions(
     runtime: "server" | "edge",
@@ -277,7 +284,6 @@ export function serverSentryOptions(
     const { dsn } = resolveDsn({
         disabled: env.SENTRY_DISABLED,
         dsn: env.SENTRY_DSN,
-        fallback: MIKE_SENTRY_DSN.frontend,
     });
     return {
         dsn: dsn || undefined,

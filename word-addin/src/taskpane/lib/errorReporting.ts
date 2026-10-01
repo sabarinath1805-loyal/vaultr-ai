@@ -12,7 +12,6 @@
 import * as Sentry from "@sentry/react";
 import { privacyBoundaryIntegration } from "@mike/sentry-event";
 import {
-  MIKE_SENTRY_DSN,
   createEventScrubber,
   installKind,
   normalizeApiPath,
@@ -52,12 +51,10 @@ export function addinSentryOptions(
     nodeEnv?: string;
   },
 ): Sentry.BrowserOptions {
-  // ON BY DEFAULT: the Mike project's own DSN unless REACT_APP_SENTRY_DISABLED
-  // or a DSN of your own is baked in at build time (README, "Telemetry").
+  // Telemetry stays off until a deployment supplies its own DSN.
   const { dsn } = resolveDsn({
     disabled: env.disabled,
     dsn: env.dsn,
-    fallback: MIKE_SENTRY_DSN.wordAddin,
   });
   return {
     dsn: dsn || undefined,
