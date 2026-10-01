@@ -20,14 +20,22 @@
 import "./instrument";
 
 import { enforceDocumentLifecycleMigration } from "./lib/dbq/lifecycleGuard";
+import { validateProductionConfiguration } from "./lib/productionConfig";
 import { startAllWorkers, stopAllWorkers } from "./workerRuntime";
 import { flushSentry, reportError } from "./lib/observability/sentry";
+import { failBoot } from "./lib/processLifecycle";
 
 // A worker against an unmigrated database cannot run the cleanup kind at all,
 // so it would fail every row it claims. Say so once, loudly, and stop — and
 // only start claiming rows once the answer is in, so no job is touched by a
 // worker the database cannot back.
 async function main(): Promise<void> {
+  try {
+    validateProductionConfiguration();
+  } catch (error) {
+    await failBoot(error, "production-config");
+    return;
+  }
   await enforceDocumentLifecycleMigration();
   startAllWorkers();
   console.log("Mike worker process running");

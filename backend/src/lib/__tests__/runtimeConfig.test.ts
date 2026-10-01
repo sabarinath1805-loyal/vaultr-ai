@@ -38,7 +38,7 @@ describe("runtime authentication configuration", () => {
         FRONTEND_URL: "http://app.example.test",
         API_PUBLIC_URL: "http://app.example.test/api",
       }),
-    ).toThrow(/FRONTEND_URL must use https in production/);
+    ).toThrow(/FRONTEND_URL must use https outside loopback in production/);
   });
 
   // MIKE-BACKEND-2: the backend image defaults NODE_ENV=production, so a bare
@@ -65,14 +65,14 @@ describe("runtime authentication configuration", () => {
     ).toThrow(/^(?![\s\S]*NODE_ENV)[\s\S]*SUPABASE_SECRET_KEY is required$/);
   });
 
-  it("does not weaken the https rule for production URLs", () => {
+  it("allows loopback production URLs when no proxy or public hostname is used", () => {
     expect(() =>
       validateRuntimeConfiguration({
         ...validProduction,
         FRONTEND_URL: "http://localhost:3000",
         API_PUBLIC_URL: "http://localhost:3000/api",
       }),
-    ).toThrow(/FRONTEND_URL must use https in production/);
+    ).not.toThrow();
   });
 
   it("accepts local http URLs outside production", () => {

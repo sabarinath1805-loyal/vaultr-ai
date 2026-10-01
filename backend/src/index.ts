@@ -8,6 +8,7 @@ import { enforceDocumentLifecycleMigration } from "./lib/dbq/lifecycleGuard";
 import { manifestPublicKey } from "./lib/manifestSigning";
 import { closeRedisConnection } from "./lib/queue/connection";
 import { warnForProcessLocalProductionRateLimits } from "./lib/rateLimit";
+import { validateProductionConfiguration } from "./lib/productionConfig";
 import { validateRuntimeConfiguration } from "./lib/runtimeConfig";
 import { startAllWorkers, stopAllWorkers } from "./workerRuntime";
 import { reportError } from "./lib/observability/sentry";
@@ -32,6 +33,7 @@ const PORT = process.env.PORT ?? 3001;
 async function validateBootConfiguration(): Promise<void> {
   let stage = "runtime-config";
   try {
+    validateProductionConfiguration();
     validateRuntimeConfiguration();
     warnForProcessLocalProductionRateLimits();
     stage = "manifest-key";

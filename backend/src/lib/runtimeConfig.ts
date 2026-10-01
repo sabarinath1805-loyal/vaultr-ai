@@ -217,9 +217,19 @@ function parsedUrl(value: string, name: string, errors: string[]): URL | null {
 }
 
 function requireHttps(url: URL | null, name: string, errors: string[]) {
-  if (url && url.protocol !== "https:") {
-    errors.push(`${name} must use https in production`);
+  if (url && url.protocol !== "https:" && !isLoopbackUrl(url)) {
+    errors.push(`${name} must use https outside loopback in production`);
   }
+}
+
+function isLoopbackUrl(url: URL): boolean {
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "::1" ||
+    /^127(?:\.\d{1,3}){3}$/.test(host)
+  );
 }
 
 export function supabaseSessionConfiguration(
