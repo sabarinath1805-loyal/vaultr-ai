@@ -5,6 +5,7 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.test.ts"],
     exclude: ["dist/**", "node_modules/**"],
+    setupFiles: ["./src/testSupport/networkGuard.setup.ts"],
     // Generous timeouts so cold-start module transform/import latency
     // can't cause spurious timeout failures on a cold CI runner. Warm
     // tests finish in ~1s; this only guards the pathological cold case —

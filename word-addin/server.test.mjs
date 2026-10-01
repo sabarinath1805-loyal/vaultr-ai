@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import "../scripts/test-network-guard.cjs";
 import http from "node:http";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";

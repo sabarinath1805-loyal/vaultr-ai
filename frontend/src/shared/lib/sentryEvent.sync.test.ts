@@ -41,7 +41,21 @@ describe("shared-redaction block", () => {
 
 it('retains the fixed vocabulary of every Express mount without parameter names', () => {
     const app = readFileSync(path.resolve(__dirname, '../../../../backend/src/app.ts'), 'utf8');
-    const routes = [...app.matchAll(/app\.(?:use|get)\("([^"]+)"/g)].map(match => match[1]);
+    const routes: string[] = [];
+    const directCalls = [...app.matchAll(/app\.(?:use|get|post|put|patch|delete)\s*\(\s*(?:"([^"]+)"|'([^']+)'|\[([\s\S]*?)\])/g)];
+    for (const match of directCalls) {
+        const value = match[1] ?? match[2];
+        if (value) routes.push(value);
+        else if (match[3]) routes.push(...[...match[3].matchAll(/["']([^"']+)["']/g)].map(item => item[1]!));
+    }
+    const mountTable = app.match(/export const routeMounts[\s\S]*?\n\];/)?.[0] ?? '';
+    for (const match of mountTable.matchAll(/path:\s*(?:"([^"]+)"|'([^']+)'|\[([^\]]*)\])/g)) {
+        const value = match[1] ?? match[2];
+        if (value) routes.push(value);
+        else if (match[3]) routes.push(...[...match[3].matchAll(/["']([^"']+)["']/g)].map(item => item[1]!));
+    }
+    const constants = [...app.matchAll(/const\s+\w*(?:PATH|ROUTE)\s*=\s*["']([^"']+)["']/g)].map(match => match[1]!);
+    routes.push(...constants);
     expect(routes.length).toBeGreaterThan(20);
     for (const route of routes) {
         expect(diagnosticRoute(route)).toBe(route.replace(/:[^/]+/g, ':id'));

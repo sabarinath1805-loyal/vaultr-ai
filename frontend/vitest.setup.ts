@@ -1,5 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { Blob as NodeBlob } from "node:buffer";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+const networkGuard = require("../scripts/test-network-guard.cjs") as {
+    install: (targetGlobal: typeof globalThis) => void;
+};
+networkGuard.install(globalThis);
 
 // Vitest's jsdom environment always overrides `globalThis.Blob` with jsdom's
 // own Blob implementation, which never implemented `.text()`/`.arrayBuffer()`/
