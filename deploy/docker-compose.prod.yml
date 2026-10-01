@@ -67,7 +67,7 @@ services:
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
       SENTRY_RELEASE: ${SENTRY_RELEASE:-}
       SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-}
-    networks: [edge, app_internal]
+    networks: [edge, api_internal]
     depends_on:
       backend:
         condition: service_healthy
@@ -116,7 +116,7 @@ services:
       SENTRY_ENABLE_TEST_ROUTE: ${SENTRY_ENABLE_TEST_ROUTE:-false}
       SENTRY_DSN: ${SENTRY_DSN:-}
     expose: ["3001"]
-    networks: [app_internal, provider_egress]
+    networks: [app_internal, api_internal, provider_egress]
     depends_on:
       redis:
         condition: service_healthy
@@ -204,7 +204,7 @@ services:
       NODE_ENV: production
       PORT: "3200"
       WORD_ADDIN_BACKEND_ORIGIN: http://backend:3001
-    networks: [edge, app_internal]
+    networks: [edge, api_internal]
     depends_on:
       backend:
         condition: service_healthy
@@ -256,6 +256,9 @@ networks:
   edge:
     driver: bridge
   app_internal:
+    driver: bridge
+    internal: true
+  api_internal:
     driver: bridge
     internal: true
   provider_egress:
