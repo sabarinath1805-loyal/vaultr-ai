@@ -111,6 +111,40 @@ describe("production configuration guard", () => {
   );
 
   it.each([
+    [" Production ", undefined],
+    ["prod", undefined],
+    ["staging", undefined],
+    [undefined, "production"],
+    ["test", "staging"],
+  ] as const)(
+    "applies production validation for normalized runtime markers (%s / %s)",
+    (nodeEnv, vaultrEnv) => {
+      const report = evaluateProductionConfiguration({
+        ...validProduction,
+        NODE_ENV: nodeEnv,
+        VAULTR_ENV: vaultrEnv,
+        TRUST_PROXY_HOPS: "invalid",
+      } as NodeJS.ProcessEnv);
+      expect(report.errors.join("\n")).toContain("TRUST_PROXY_HOPS");
+    },
+  );
+
+  it.each([undefined, "", "   "])(
+    "warns if public deployment endpoints are configured but NODE_ENV is %s",
+    (nodeEnv) => {
+      const report = evaluateProductionConfiguration({
+        NODE_ENV: nodeEnv,
+        SUPABASE_URL: "https://tenant.supabase.co",
+        FRONTEND_URL: "https://app.example.test",
+        API_PUBLIC_URL: "https://api.example.test",
+      } as NodeJS.ProcessEnv);
+      expect(report.errors).toEqual([]);
+      expect(report.warnings.join("\n")).toMatch(/production configuration guard is not active/i);
+      expect(report.warnings.join("\n")).not.toContain("example.test");
+    },
+  );
+
+  it.each([
     ["SUPABASE_SECRET_KEY", undefined, "required"],
     ["SUPABASE_SECRET_KEY", "service-role-key-that-is-not-a-demo-value", "must differ"],
     ["SUPABASE_PUBLISHABLE_KEY", undefined, "required"],
@@ -182,16 +216,35 @@ describe("production configuration guard", () => {
     const values = sensitiveValuesFromRepository();
     expect(values.length).toBeGreaterThan(0);
     for (const value of values) {
-      const env = {
-        ...validProduction,
-        SUPABASE_SECRET_KEY: value,
-      } as NodeJS.ProcessEnv;
-      const message = evaluateProductionConfiguration(env).errors.join("\n");
-      expect(message).toContain(
-        "checked-in demo/default value",
-      );
-      expect(message).not.toContain(value);
+      const encodedVariants = [
+        ["SUPABASE_SECRET_KEY", value],
+        ["SUPABASE_SERVICE_ROLE_KEY", encodeURIComponent(value)],
+        ["SUPABASE_SECRET_KEY_FILE", Buffer.from(value).toString("base64")],
+      ] as const;
+      for (const [name, candidate] of encodedVariants) {
+        const env = {
+          ...validProduction,
+          [name]: candidate,
+        } as NodeJS.ProcessEnv;
+        const message = evaluateProductionConfiguration(env).errors.join("\n");
+        expect(message).toContain("checked-in demo/default value");
+        expect(message).not.toContain(candidate);
+      }
     }
+  });
+
+  it.each([
+    ["DeMo-placeholder", "CUSTOM_API_KEY"],
+    ["  replace-me  ", "CUSTOM_SECRET_FILE"],
+    ["replace%2Dme", "CUSTOM_API_KEY"],
+    ["ZGVtbw==", "CUSTOM_SECRET_FILE"],
+  ])("rejects normalized demo secret material from %s", (value, name) => {
+    const report = evaluateProductionConfiguration({
+      ...validProduction,
+      [name]: value,
+    } as NodeJS.ProcessEnv);
+    expect(report.errors.join("\n")).toContain("checked-in demo/default value");
+    expect(report.errors.join("\n")).not.toContain(value.trim());
   });
 
   it("emits one coalesced warning without values when optional settings are absent", () => {

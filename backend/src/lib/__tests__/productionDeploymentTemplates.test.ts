@@ -150,6 +150,7 @@ describe("production deployment templates", () => {
 
   it("gives every production environment setting its own plain-language description", () => {
     const lines = envText.split(/\r?\n/);
+    expect(exampleEnvironment().VAULTR_ENV).toBe("production");
     for (const [index, line] of lines.entries()) {
       if (!/^[A-Z][A-Z0-9_]*=/.test(line)) continue;
       expect(lines[index - 1], line.split("=", 1)[0]).toMatch(/^# .+\S$/);

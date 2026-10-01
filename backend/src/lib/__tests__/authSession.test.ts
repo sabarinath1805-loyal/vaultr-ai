@@ -46,6 +46,16 @@ describe("backend-managed auth cookies", () => {
     expect(authCookieName(env)).toBe("mike-session");
   });
 
+  it.each([
+    { NODE_ENV: " Production " },
+    { NODE_ENV: "prod" },
+    { NODE_ENV: "staging" },
+    { VAULTR_ENV: "production" },
+  ])("uses production cookies for normalized deployment markers (%o)", (env) => {
+    expect(authCookiesAreSecure(env as NodeJS.ProcessEnv)).toBe(true);
+    expect(authCookieName(env as NodeJS.ProcessEnv)).toBe("__Host-mike-session");
+  });
+
   it("forces HttpOnly, SameSite=Lax, Secure, and Path=/ on every session write", () => {
     process.env.NODE_ENV = "production";
     const append = vi.fn();

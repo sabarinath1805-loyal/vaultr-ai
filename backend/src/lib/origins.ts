@@ -1,8 +1,10 @@
+import { isProductionEnvironment } from "./environmentMode";
+
 export function configuredAllowedOrigins(
   env: NodeJS.ProcessEnv = process.env,
 ): Set<string> {
   const developmentOrigins =
-    env.NODE_ENV === "production"
+    isProductionEnvironment(env)
       ? []
       : [
           ...(env.FRONTEND_URL ? [] : ["http://localhost:3000"]),
@@ -39,7 +41,7 @@ export function requestOriginIsWordAddin(
 ): boolean {
   const configured =
     env.WORD_ADDIN_URL?.trim() ||
-    (env.NODE_ENV === "production" ? "" : "https://localhost:3200");
+    (isProductionEnvironment(env) ? "" : "https://localhost:3200");
   if (!origin || !configured) return false;
   try {
     return new URL(origin).origin === new URL(configured).origin;

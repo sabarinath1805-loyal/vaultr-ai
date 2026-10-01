@@ -6,6 +6,7 @@ import {
   type CookieOptions,
 } from "@supabase/ssr";
 import type { SupabaseClient, User } from "@supabase/supabase-js";
+import { isProductionEnvironment } from "./environmentMode";
 import { requestOriginIsWordAddin } from "./origins";
 import { supabaseSessionConfiguration } from "./runtimeConfig";
 
@@ -25,7 +26,7 @@ function authConfiguration() {
 export function authCookiesAreSecure(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return env.NODE_ENV === "production";
+  return isProductionEnvironment(env);
 }
 
 export function authCookieName(env: NodeJS.ProcessEnv = process.env): string {

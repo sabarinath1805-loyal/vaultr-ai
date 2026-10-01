@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { mkdir, open } from "fs/promises";
 import type { FileHandle } from "fs/promises";
 import path from "path";
+import { isProductionEnvironment } from "../environmentMode";
 
 type RawStreamEntry = {
   timestamp: string;
@@ -12,9 +13,9 @@ type RawStreamEntry = {
 
 // These logs contain the verbatim prompt and completion — privileged client
 // content — so they are a development-only aid. Both entry points hard-refuse
-// to run under NODE_ENV=production regardless of how the env is configured.
+// to run in a production-like runtime regardless of how mode is configured.
 function rawStreamLoggingAllowed(): boolean {
-  return process.env.NODE_ENV !== "production";
+  return !isProductionEnvironment();
 }
 
 function rawStreamLogDir(): string | null {

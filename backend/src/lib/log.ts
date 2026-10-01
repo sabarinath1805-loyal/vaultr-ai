@@ -2,11 +2,13 @@
 // `devLog` (a fourth, lib/chat/types.ts, exported the copy the chat tree
 // imports); this is the single definition they all use.
 
+import { isProductionEnvironment } from "./environmentMode";
+
 /**
  * Exported for call sites that gate WORK (extra lookups, payload assembly)
  * behind dev mode, not just the log line itself.
  */
-export const isDev = process.env.NODE_ENV !== "production";
+export const isDev = !isProductionEnvironment();
 
 /**
  * Verbose tracing that is only useful while developing. Silent in production,

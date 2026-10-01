@@ -1,3 +1,5 @@
+import { isProductionEnvironment } from "./environmentMode";
+
 function required(env: NodeJS.ProcessEnv, names: readonly string[]): string {
   for (const name of names) {
     const value = env[name]?.trim();
@@ -293,7 +295,7 @@ export function validateRuntimeConfiguration(
   }
 
   const errorsBeforeProductionChecks = errors.length;
-  if (env.NODE_ENV === "production") {
+  if (isProductionEnvironment(env)) {
     const frontend = env.FRONTEND_URL?.trim();
     if (!frontend) {
       errors.push("FRONTEND_URL is required in production");
@@ -333,9 +335,9 @@ export function validateRuntimeConfiguration(
     // first, so say which switch they are actually looking for.
     const hint =
       errors.length > errorsBeforeProductionChecks
-        ? "\n\nNODE_ENV=production requires the public https URLs above " +
+        ? "\n\nProduction-like mode requires the public https URLs above " +
           "(FRONTEND_URL, API_PUBLIC_URL, and WORD_ADDIN_URL when set). " +
-          "For a local run over http, set NODE_ENV=development instead; " +
+          "For a local run over http, set NODE_ENV=development and leave VAULTR_ENV unset or set it to local; " +
           "docker compose does this by default. See docs/deployment.md."
         : "";
     throw Object.assign(

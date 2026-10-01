@@ -24,6 +24,7 @@ import { authenticatedRateLimit } from "../../lib/rateLimit";
 import { createServerSupabase } from "../../lib/supabase";
 import { recordAudit } from "../../lib/audit";
 import { sendInternalError } from "../../lib/httpError";
+import { isProductionEnvironment } from "../../lib/environmentMode";
 import { dbJobsEnabled } from "../../lib/dbq/runner";
 import { buildContentDisposition } from "../../lib/storage";
 import { normalizeApiKeyProvider } from "./user.apiKeyStore";
@@ -82,7 +83,7 @@ function backendPublicUrl(req: {
 }) {
     const configured = configuredApiPublicUrl();
     if (configured) return configured;
-    if (process.env.NODE_ENV === "production") {
+    if (isProductionEnvironment()) {
         throw new Error("API_PUBLIC_URL is required for connector OAuth");
     }
     const host = req.get("host");

@@ -26,6 +26,7 @@ import {
   userMemoryRouter,
 } from "./modules/memory/memory.routes";
 import { manifestPublicKey } from "./lib/manifestSigning";
+import { isProductionEnvironment } from "./lib/environmentMode";
 import {
   handleUnhandledError,
   protectInternalErrorResponses,
@@ -41,7 +42,7 @@ import {
 } from "./lib/rateLimit";
 
 export const app = express();
-const isProduction = process.env.NODE_ENV === "production";
+const isProduction = isProductionEnvironment();
 
 // The Word tool-result return channel gets a generous IP backstop. Its
 // identity-keyed budget is enforced after authentication in the router.

@@ -8,6 +8,7 @@ import type {
   Store,
 } from "express-rate-limit";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
+import { isProductionEnvironment } from "./environmentMode";
 import { envInt, uploadSessionRateLimitConfiguration } from "./runtimeConfig";
 import { getRedisRateLimitConnection } from "./queue/connection";
 
@@ -418,7 +419,7 @@ export function usesSharedRateLimitStore(
 export function warnForProcessLocalProductionRateLimits(
   env: NodeJS.ProcessEnv = process.env,
 ): void {
-  if (env.NODE_ENV !== "production" || usesSharedRateLimitStore(env)) return;
+  if (!isProductionEnvironment(env) || usesSharedRateLimitStore(env)) return;
   console.warn(
     "[rate-limit] production counters are process-local; run one API process or configure REDIS_URL for shared atomic limits. In-memory counters reset on restart.",
   );

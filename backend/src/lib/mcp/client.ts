@@ -2,6 +2,7 @@ import crypto from "crypto";
 import dns from "dns/promises";
 import net from "net";
 import { Agent, fetch as undiciFetch } from "undici";
+import { isProductionEnvironment } from "../environmentMode";
 import {
     isAllowlistablePrivateIp,
     isBlockedIp,
@@ -52,7 +53,7 @@ function encryptionKey(): Buffer {
 
 export function mcpOAuthCallbackUrl() {
     const configured = configuredApiPublicUrl();
-    if (!configured && process.env.NODE_ENV === "production") {
+    if (!configured && isProductionEnvironment()) {
         throw new Error("API_PUBLIC_URL is required for connector OAuth");
     }
     const base =

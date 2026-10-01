@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import net from "node:net";
+import {
+  isExplicitLocalEnvironment,
+  isProductionEnvironment,
+} from "./environmentMode";
 import { isAllowlistablePrivateIp, isBlockedIp, isLoopbackIp } from "./privateIp";
 
 type ConfigurationReport = { errors: string[]; warnings: string[] };
@@ -40,12 +44,51 @@ function fingerprint(value: string): string {
   return createHash("sha256").update(value.trim()).digest("hex");
 }
 
+function strictBase64Decode(value: string): string | null {
+  if (value.length < 4 || !/^[A-Za-z0-9+/_-]+={0,2}$/.test(value)) return null;
+  const standard = value.replace(/-/g, "+").replace(/_/g, "/");
+  const unpadded = standard.replace(/=+$/, "");
+  const bytes = Buffer.from(standard, "base64");
+  if (bytes.toString("base64").replace(/=+$/, "") !== unpadded) return null;
+  const decoded = bytes.toString("utf8");
+  if (!Buffer.from(decoded, "utf8").equals(bytes)) return null;
+  return /^[\x20-\x7e]+$/.test(decoded) ? decoded.trim() : null;
+}
+
+function secretValueVariants(value: string): Set<string> {
+  const variants = new Set([value.trim()]);
+  let frontier = [...variants];
+  for (let depth = 0; depth < 3 && frontier.length > 0; depth += 1) {
+    const next: string[] = [];
+    for (const candidate of frontier) {
+      for (const decoded of [
+        (() => {
+          try {
+            return decodeURIComponent(candidate);
+          } catch {
+            return candidate;
+          }
+        })(),
+        strictBase64Decode(candidate) ?? candidate,
+      ]) {
+        const normalized = decoded.trim();
+        if (normalized && !variants.has(normalized)) {
+          variants.add(normalized);
+          next.push(normalized);
+        }
+      }
+    }
+    frontier = next;
+  }
+  return variants;
+}
+
 function isKnownDemoSecret(value: string): boolean {
-  const normalized = value.trim();
-  if (!normalized) return false;
-  if (CHECKED_IN_DEMO_SECRET_FINGERPRINTS.has(fingerprint(normalized))) return true;
-  return /^(?:your(?:[-_ ]|$)|change(?:[-_ ]?me)?(?:[-_ ]|$)|replace(?:[-_ ]?me)?(?:[-_ ]|$)|demo(?:[-_ ]|$)|default(?:[-_ ]|$)|example(?:[-_.]|$)|placeholder(?:[-_ ]|$)|not[-_ ]?a[-_ ]?real(?:[-_ ]|$)|<[^>]+>)/i.test(
-    normalized,
+  const placeholder = /^(?:your(?:[-_ ]|$)|change(?:[-_ ]?me)?(?:[-_ ]|$)|replace(?:[-_ ]?me)?(?:[-_ ]|$)|demo(?:[-_ ]|$)|default(?:[-_ ]|$)|example(?:[-_.]|$)|placeholder(?:[-_ ]|$)|not[-_ ]?a[-_ ]?real(?:[-_ ]|$)|<[^>]+>)/i;
+  return [...secretValueVariants(value)].some(
+    (candidate) =>
+      CHECKED_IN_DEMO_SECRET_FINGERPRINTS.has(fingerprint(candidate)) ||
+      placeholder.test(candidate),
   );
 }
 
@@ -200,8 +243,49 @@ function checkRateLimitConfiguration(env: Environment, errors: string[]) {
   }
 }
 
+function hasExternalServiceEndpoint(env: Environment): boolean {
+  for (const name of [
+    "SUPABASE_URL",
+    "FRONTEND_URL",
+    "API_PUBLIC_URL",
+    "WORD_ADDIN_URL",
+    "R2_ENDPOINT_URL",
+    "R2_PUBLIC_ENDPOINT_URL",
+  ]) {
+    const value = configured(env[name]);
+    if (!value) continue;
+    try {
+      const url = new URL(value);
+      if (
+        (url.protocol === "http:" || url.protocol === "https:") &&
+        url.hostname &&
+        !hostnameIsLoopback(url.hostname)
+      ) {
+        return true;
+      }
+    } catch {
+      // Invalid endpoint values are handled by the production checks when
+      // production mode is active. They do not identify a deployment here.
+    }
+  }
+  return false;
+}
+
 function evaluate(env: Environment): ConfigurationReport {
-  if (env.NODE_ENV !== "production") return { errors: [], warnings: [] };
+  if (!isProductionEnvironment(env)) {
+    if (
+      !isExplicitLocalEnvironment(env) &&
+      hasExternalServiceEndpoint(env)
+    ) {
+      return {
+        errors: [],
+        warnings: [
+          "Production configuration guard is not active while non-loopback service endpoints are configured. Set NODE_ENV=production or VAULTR_ENV=production before exposing this process.",
+        ],
+      };
+    }
+    return { errors: [], warnings: [] };
+  }
 
   const errors: string[] = [];
   const warnings: string[] = [];
