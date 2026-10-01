@@ -198,6 +198,11 @@
       "files": ["server.test.mjs"]
     },
     {
+      "name": "WS6b browser egress guard",
+      "runner": "node",
+      "files": ["scripts/e2eLocalEgress.security.test.mjs"]
+    },
+    {
       "name": "WS7 startup guard, templates and read-only probes",
       "runner": "backend-vitest",
       "files": [

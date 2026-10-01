@@ -104,6 +104,9 @@ set_kv .env RATE_LIMIT_UPLOAD_SESSION_CREATE_MAX_PER_HOUR 100000
 touch "$FRONTEND/.env.local"
 [ -f "$FRONTEND/.env.local.hosted.bak" ] || cp "$FRONTEND/.env.local" "$FRONTEND/.env.local.hosted.bak"
 set_kv "$FRONTEND/.env.local" API_BASE_URL "http://localhost:3001"
+# The production CSP permits browser uploads only to this local object-store
+# origin. Keep the E2E browser path aligned with the RustFS port in Compose.
+set_kv "$FRONTEND/.env.local" R2_PUBLIC_ENDPOINT_URL "http://localhost:${STORAGE_PORT:-9000}"
 
 echo "Local stack ready: $API_URL (db: ${DB_URL%%\?*})"
 

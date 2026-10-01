@@ -1,4 +1,13 @@
 import { defineConfig, devices } from "@playwright/test";
+import { resolve } from "node:path";
+require("../scripts/test-network-guard.cjs");
+
+const localNetworkGuardPreload = resolve(__dirname, "../scripts/test-network-guard.cjs");
+process.env.NODE_OPTIONS = [process.env.NODE_OPTIONS, `--require=${localNetworkGuardPreload}`]
+  .filter(Boolean)
+  .join(" ");
+process.env.PLAYWRIGHT_LOCAL_EGRESS_PORT = "39088";
+process.env.PLAYWRIGHT_LOCAL_EGRESS_LABEL = "Word";
 
 /**
  * E2E config for the Mike Word add-in.
@@ -19,6 +28,7 @@ const BASE_URL = `http://localhost:${PORT}`;
 
 export default defineConfig({
   testDir: "./e2e",
+  globalSetup: "../scripts/e2e-local-egress-guard.cjs",
   // Single shared in-page Office shim + recorded Word calls per page; keep it
   // strictly serial and deterministic, matching the repo's Playwright style.
   fullyParallel: false,
@@ -31,6 +41,10 @@ export default defineConfig({
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? BASE_URL,
     screenshot: "only-on-failure",
     trace: "on-first-retry",
+    proxy: {
+      server: "http://127.0.0.1:39088",
+      bypass: "<-loopback>",
+    },
     // PW_VIDEO=1 records a webm per test (for demo/review reels); off by
     // default because videos slow the suite and bloat CI artifacts.
     video: process.env.PW_VIDEO === "1" ? "on" : "off",
@@ -59,6 +73,10 @@ export default defineConfig({
     command: "npm run build:e2e && npm run serve:e2e",
     url: `${BASE_URL}/taskpane.html`,
     reuseExistingServer: !process.env.CI,
+    env: {
+      ...process.env,
+      NODE_OPTIONS: process.env.NODE_OPTIONS,
+    },
     // Generous because the command includes a cold typecheck + production
     // webpack build on CI runners; a webServer timeout aborts the whole run
     // (retries never apply to it).

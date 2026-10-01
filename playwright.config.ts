@@ -1,4 +1,14 @@
 import { defineConfig, devices } from "@playwright/test";
+import { resolve } from "node:path";
+require("./scripts/test-network-guard.cjs");
+
+const localNetworkGuardPreload = resolve(__dirname, "scripts/test-network-guard.cjs");
+const nodeOptions = [process.env.NODE_OPTIONS, `--require=${localNetworkGuardPreload}`]
+    .filter(Boolean)
+    .join(" ");
+process.env.NODE_OPTIONS = nodeOptions;
+process.env.PLAYWRIGHT_LOCAL_EGRESS_PORT = "39087";
+process.env.PLAYWRIGHT_LOCAL_EGRESS_LABEL = "web";
 
 /**
  * Run `npx playwright install` to download the browsers.
@@ -6,6 +16,7 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
     testDir: "./e2e",
+    globalSetup: "./scripts/e2e-local-egress-guard.cjs",
     /* These E2E tests run against a single shared backend and a single shared
        test user (e2e@mike.local). Running them concurrently causes data races
        on shared list views (projects/chats/workflows) and on the user's
@@ -37,6 +48,10 @@ export default defineConfig({
         baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000",
         trace: "on-first-retry",
         screenshot: "only-on-failure",
+        proxy: {
+            server: "http://127.0.0.1:39087",
+            bypass: "<-loopback>",
+        },
     },
 
     projects: [
@@ -71,6 +86,7 @@ export default defineConfig({
                   url: "http://localhost:3001/health",
                   reuseExistingServer: true,
                   timeout: 120_000,
+                  env: { ...process.env, NODE_OPTIONS: nodeOptions },
               },
               {
                   command: "npm run dev",
@@ -78,6 +94,7 @@ export default defineConfig({
                   url: "http://localhost:3000",
                   reuseExistingServer: true,
                   timeout: 120_000,
+                  env: { ...process.env, NODE_OPTIONS: nodeOptions },
               },
           ],
 });
