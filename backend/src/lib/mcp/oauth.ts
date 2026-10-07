@@ -240,6 +240,12 @@ function oauthClientEnvFor(serverUrl: string) {
     const provider = mcpOAuthProviderFor(serverUrl);
     const prefix = provider?.envPrefix;
     return {
+        // Pre-registered credentials must stay bound to their trusted issuer.
+        issuer: provider?.id === "google"
+            ? "https://accounts.google.com"
+            : provider?.id === "slack"
+                ? "https://mcp.slack.com"
+                : undefined,
         clientId: prefix ? process.env[`${prefix}_CLIENT_ID`] : undefined,
         clientSecret: prefix
             ? process.env[`${prefix}_CLIENT_SECRET`]
@@ -548,7 +554,10 @@ export class DbMcpOAuthProvider implements OAuthClientProvider {
 
     async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
         const token = await loadOAuthToken(this.connector.id, this.db);
-        if (token?.client_id && oauthTokenBoundToConnector(token, this.connector)) {
+        if (
+            token?.client_id && token.authorization_server &&
+            oauthTokenBoundToConnector(token, this.connector)
+        ) {
             const clientSecret = decryptString(
                 token.encrypted_client_secret,
                 token.client_secret_iv,
@@ -556,6 +565,7 @@ export class DbMcpOAuthProvider implements OAuthClientProvider {
             );
             return {
                 client_id: token.client_id,
+                issuer: token.authorization_server,
                 ...(clientSecret ? { client_secret: clientSecret } : {}),
             };
         }
@@ -563,6 +573,7 @@ export class DbMcpOAuthProvider implements OAuthClientProvider {
         if (!env.clientId) return undefined;
         return {
             client_id: env.clientId,
+            issuer: env.issuer,
             ...(env.clientSecret ? { client_secret: env.clientSecret } : {}),
         };
     }
@@ -575,6 +586,7 @@ export class DbMcpOAuthProvider implements OAuthClientProvider {
         const row = {
             connector_id: this.connector.id,
             client_id: info.client_id,
+            authorization_server: info.issuer ?? null,
             // Bind dynamically registered client credentials too; an OAuth
             // callback that races an endpoint edit must not reuse them for a
             // different connector host.
@@ -592,6 +604,7 @@ export class DbMcpOAuthProvider implements OAuthClientProvider {
         const row = await loadOAuthToken(this.connector.id, this.db);
         if (
             !row?.encrypted_access_token ||
+            !row.authorization_server ||
             !oauthTokenBoundToConnector(row, this.connector)
         ) return undefined;
         const accessToken = decryptString(
@@ -611,6 +624,7 @@ export class DbMcpOAuthProvider implements OAuthClientProvider {
             : undefined;
         return {
             access_token: accessToken,
+            issuer: row.authorization_server,
             token_type: row.token_type ?? "Bearer",
             ...(refreshToken ? { refresh_token: refreshToken } : {}),
             ...(row.scope ? { scope: row.scope } : {}),
@@ -633,6 +647,7 @@ export class DbMcpOAuthProvider implements OAuthClientProvider {
             typeof tokens.expires_in === "number" ? tokens.expires_in : null;
         const row = {
             connector_id: this.connector.id,
+            authorization_server: tokens.issuer ?? existing?.authorization_server ?? null,
             ...tokenSecretPatch("access_token", tokens.access_token),
             ...tokenSecretPatch(
                 "refresh_token",

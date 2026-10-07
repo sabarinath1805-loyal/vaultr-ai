@@ -228,7 +228,9 @@ function makeRowStoreDb() {
                             ) {
                                 store.row = { ...store.row, ...patch };
                             }
-                            return Promise.resolve({ error: null });
+                            return Object.assign(Promise.resolve({ error: null }), {
+                                eq: () => Promise.resolve({ error: null }),
+                            });
                         },
                     };
                 },
@@ -592,6 +594,7 @@ describe("startUserMcpConnectorOAuth", () => {
             // The SDK's DCR step, followed by the redirect request.
             await provider.saveClientInformation({
                 client_id: "dcr-client-id",
+                issuer: "https://auth.example.com",
             });
             await provider.redirectToAuthorization(new URL(AUTH_URL));
             return "REDIRECT";
@@ -624,6 +627,7 @@ describe("startUserMcpConnectorOAuth", () => {
         );
         await expect(callbackProvider.clientInformation()).resolves.toEqual({
             client_id: "dcr-client-id",
+            issuer: "https://auth.example.com",
         });
 
         const changedHostProvider = new DbMcpOAuthProvider(
@@ -659,5 +663,112 @@ describe("startUserMcpConnectorOAuth", () => {
         });
         expect(deletes).toHaveLength(0);
         expect(updates).toHaveLength(0);
+    });
+});
+
+// Credentials persisted before SDK issuer binding must not be released to
+// a server-selected authorization endpoint.
+describe("MCP OAuth issuer binding", () => {
+    it("preserves the token issuer across database round trips", async () => {
+        vi.stubEnv(
+            "MCP_CONNECTORS_ENCRYPTION_SECRET",
+            "test-only-issuer-binding-secret",
+        );
+        try {
+            const { db } = makeRowStoreDb();
+            const provider = new DbMcpOAuthProvider(
+                db,
+                makeConnector("https://mcp.example.com/mcp"),
+                "user-1",
+                "initiate",
+                "https://app.test/callback",
+            );
+            await provider.saveClientInformation({
+                client_id: "registered-client",
+                issuer: "https://auth.example.com",
+            });
+            await provider.saveTokens({
+                access_token: "test-access-token",
+                refresh_token: "test-refresh-token",
+                token_type: "Bearer",
+                issuer: "https://auth.example.com",
+            });
+            await expect(provider.tokens()).resolves.toMatchObject({
+                issuer: "https://auth.example.com",
+                access_token: "test-access-token",
+                refresh_token: "test-refresh-token",
+            });
+        } finally {
+            vi.unstubAllEnvs();
+        }
+    });
+
+    it("pins pre-registered Google and Slack credentials to trusted issuers", async () => {
+        vi.stubEnv("GOOGLE_MCP_OAUTH_CLIENT_ID", "test-google-client");
+        vi.stubEnv("SLACK_MCP_OAUTH_CLIENT_ID", "test-slack-client");
+        try {
+            for (const [server, issuer] of [
+                [
+                    "https://drivemcp.googleapis.com/mcp/v1",
+                    "https://accounts.google.com",
+                ],
+                ["https://mcp.slack.com/mcp", "https://mcp.slack.com"],
+            ]) {
+                const { db } = makeRowStoreDb();
+                const provider = new DbMcpOAuthProvider(
+                    db,
+                    makeConnector(server),
+                    "user-1",
+                    "use",
+                    "https://app.test/callback",
+                );
+                await expect(
+                    provider.clientInformation(),
+                ).resolves.toMatchObject({ issuer });
+            }
+        } finally {
+            vi.unstubAllEnvs();
+        }
+    });
+
+    it("withholds legacy credentials without an authorization server", async () => {
+        const { db, store } = makeRowStoreDb();
+        const connector = makeConnector("https://mcp.example.com/mcp");
+        store.row = {
+            client_id: "legacy-client",
+            resource: connector.server_url,
+            encrypted_access_token: "legacy-encrypted-token",
+        };
+        const provider = new DbMcpOAuthProvider(
+            db,
+            connector,
+            "user-1",
+            "use",
+            "https://app.test/callback",
+        );
+        await expect(provider.clientInformation()).resolves.toBeUndefined();
+        await expect(provider.tokens()).resolves.toBeUndefined();
+    });
+
+    it("preserves the SDK issuer across client registration persistence", async () => {
+        const { db, store } = makeRowStoreDb();
+        const provider = new DbMcpOAuthProvider(
+            db,
+            makeConnector("https://mcp.example.com/mcp"),
+            "user-1",
+            "initiate",
+            "https://app.test/callback",
+        );
+        await provider.saveClientInformation({
+            client_id: "registered-client",
+            issuer: "https://auth.example.com",
+        });
+        expect(store.row?.authorization_server).toBe(
+            "https://auth.example.com",
+        );
+        await expect(provider.clientInformation()).resolves.toEqual({
+            client_id: "registered-client",
+            issuer: "https://auth.example.com",
+        });
     });
 });

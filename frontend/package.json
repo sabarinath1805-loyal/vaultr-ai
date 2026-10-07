@@ -90,7 +90,9 @@
     },
     "overrides": {
         "eslint-plugin-react-hooks": "~7.0.1",
-        "sharp": "^0.35.4"
+        "sharp": "^0.35.5",
+        "uuid": "11.1.1",
+        "katex": "$katex"
     },
     "license": "AGPL-3.0-only"
 }
