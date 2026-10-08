@@ -1,0 +1,4 @@
+# Confirmed documentation false positive: prose in THREAT_MODEL.md, not a key.
+# Commit-specific fingerprint verified against gitleaks v8.30.1 detector source.
+# This does not ignore the file, other lines, or the same line in future commits.
+d28bda0d40600bf59deb55b8e0c7c3901728fad8:docs/security/THREAT_MODEL.md:generic-api-key:68
