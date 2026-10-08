@@ -1,5 +1,10 @@
 # Vaultr-AI security baseline
 
+> Historical baseline: dependency counts below describe the frozen release,
+> not the current branch. See [the current security assessment](security/SECURITY_EXECUTIVE_SUMMARY.md)
+> and [dependency verification](security/DEPENDENCY_SECURITY.md) for the
+> 8 October 2026 review, residual risks, and executed coverage.
+
 This document freezes the application contracts represented by the
 `security-baseline-1` tag. It records local code and test evidence; it does
 not certify a production deployment or a third-party provider. Run the pinned
