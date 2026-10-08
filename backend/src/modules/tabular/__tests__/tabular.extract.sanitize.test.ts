@@ -5,6 +5,7 @@
 // last so already-escaped text is not double-unescaped into live markup.
 
 import { describe, it, expect, vi } from "vitest";
+import JSZip from "jszip";
 
 let mammothHtml = "";
 vi.mock("mammoth", () => ({
@@ -22,7 +23,9 @@ import { extractDocxMarkdown } from "../tabular.extract";
 
 async function markdownFor(html: string): Promise<string> {
     mammothHtml = html;
-    return extractDocxMarkdown(new ArrayBuffer(4));
+    const zip = new JSZip();
+    zip.file("word/document.xml", "<w:document/>");
+    return extractDocxMarkdown(await zip.generateAsync({ type: "arraybuffer" }));
 }
 
 describe("extractDocxMarkdown sanitization", () => {

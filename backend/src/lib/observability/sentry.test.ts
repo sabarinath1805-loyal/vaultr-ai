@@ -1,3 +1,7 @@
+import express from "express";
+import { withSupertestClient } from "../../__tests__/helpers/supertestClient";
+import { sendInternalError } from "../httpError";
+import { protectInternalErrorResponses } from "../../middleware/internalErrorResponse";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // A fake scope records what reportError() sets so the assertions can check
@@ -278,6 +282,44 @@ describe("scrubEvent", () => {
     )!;
     expect(scrubbed.user).toBeUndefined();
   });
+
+  it.each(["reported-error", "sanitized-response"])(
+    "retains one explicit %s report and drops only its safe console summary",
+    async (mode) => {
+      const quietLog = vi.spyOn(console, "log").mockImplementation(() => {});
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        initSentry("api", {
+          ...quietEnv,
+          SENTRY_DSN: "https://key@o1.ingest.sentry.io/1",
+        });
+        const app = express();
+        app.use(protectInternalErrorResponses);
+        app.get("/test", (_req, res) => {
+          if (mode === "reported-error") {
+            sendInternalError(res, new Error("synthetic-private-clause"));
+          } else {
+            res.status(500).json({ detail: "synthetic-private-clause" });
+          }
+        });
+        await withSupertestClient(app, (client) => client.request().get("/test"));
+        expect(sentryMock.captureException.mock.calls.length + sentryMock.captureMessage.mock.calls.length).toBe(1);
+        expect(consoleError).toHaveBeenCalledOnce();
+        const args = consoleError.mock.calls[0];
+        const consoleEvent = { logger: "console", message: "central failure" } as Parameters<typeof scrubEvent>[0];
+        expect(scrubEvent(consoleEvent, {
+          captureContext: { extra: { arguments: args } },
+        })).toBeNull();
+        // An independent event with the same label must remain reportable.
+        expect(scrubEvent({ logger: "console", message: "standalone" } as Parameters<typeof scrubEvent>[0], {
+          captureContext: { extra: { arguments: [args[0], { error: { category: "operation_failed" } }] } },
+        })).not.toBeNull();
+      } finally {
+        consoleError.mockRestore();
+        quietLog.mockRestore();
+      }
+    },
+  );
 
   it("drops the console bridge's duplicate of an explicitly reported error", () => {
     const error = new Error("boom");

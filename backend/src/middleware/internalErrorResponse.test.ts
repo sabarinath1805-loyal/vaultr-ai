@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withSupertestClient } from "../__tests__/helpers/supertestClient";
@@ -31,6 +32,25 @@ describe("protectInternalErrorResponses", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
+  });
+
+  it("keeps hand-written failure details and download capabilities out of console logs", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const secret = "synthetic-private-document-clause-and-secret";
+    const token = "synthetic-download-capability";
+    const app = express();
+    app.use(protectInternalErrorResponses);
+    app.get("/download/:token", (_req, res) => res.status(500).json({ detail: secret }));
+    const response = await withSupertestClient(app, (client) =>
+      client.request().get(`/download/${token}`),
+    );
+    expect(response.status).toBe(500);
+    const logs = inspect(consoleError.mock.calls, { depth: 10 });
+    expect(logs).not.toContain(secret);
+    expect(logs).not.toContain(token);
+    expect(logs).toContain("unknown_failure");
+    expect(logs).toContain("/download/[Filtered]");
+    expect(reportMessage).toHaveBeenCalledWith(secret, expect.any(Object));
   });
 
   it("omits callback query credentials from logs and error reports", async () => {

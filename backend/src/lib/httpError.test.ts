@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const reportError = vi.hoisted(() => vi.fn(() => "event-1"));
@@ -31,6 +32,25 @@ describe("sendInternalError", () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.restoreAllMocks();
+  });
+
+  it("keeps failure content, nested causes and download capabilities out of console logs", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const secret = "synthetic-document-clause-and-provider-secret";
+    const token = "synthetic-download-capability";
+    const failure = new Error(secret, { cause: { details: secret } });
+    const app = express();
+    app.get("/download/:token", (_req, res) => sendInternalError(res, failure));
+    const response = await withSupertestClient(app, (client) =>
+      client.request().get(`/download/${token}`),
+    );
+    expect(response.status).toBe(500);
+    const logs = inspect(consoleError.mock.calls, { depth: 10 });
+    expect(logs).not.toContain(secret);
+    expect(logs).not.toContain(token);
+    expect(logs).toContain("operation_failed");
+    expect(logs).toContain("/download/[Filtered]");
+    expect(reportError).toHaveBeenCalledWith(failure, expect.any(Object));
   });
 
   it("reports the error to Sentry with the request id and route pattern, then answers 500", async () => {

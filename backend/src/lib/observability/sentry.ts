@@ -17,6 +17,7 @@
 //      explicitly are remembered so the bridge does not double-report them.
 
 import * as Sentry from "@sentry/node";
+import { safeError } from "../safeError";
 import { diagnosticErrorTags, privacyBoundaryIntegration } from "./sentryPrivacy";
 
 export type SentryRole = "api" | "worker" | "worker-thread" | "job";
@@ -856,6 +857,18 @@ export function reportError(
       error instanceof Error ? error : new Error(describe(error), { cause: error }),
     );
   });
+}
+
+/**
+ * A safe console companion to an event already explicitly reported. Remember
+ * only the summary object, never a hidden reference to the private failure.
+ * The existing bridge deduplication recognises this exact object; independent
+ * console events with identical labels or categories remain reportable.
+ */
+export function reportedConsoleSummary(error: unknown): { category: string } {
+  const summary = safeError(error);
+  reportedErrors.add(summary);
+  return summary;
 }
 
 /** A message-only event (no Error object), for "this should never happen". */

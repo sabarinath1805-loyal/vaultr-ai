@@ -169,7 +169,8 @@ describe("guardedFetch", () => {
 
     it("reuses a pinned dispatcher and disables redirects for public hosts", async () => {
         resolvesTo("93.184.216.34");
-        fetchSpy.mockResolvedValue(
+        // A real fetch returns a fresh body stream for every request.
+        fetchSpy.mockImplementation(async () =>
             new Response("ok", { status: 200 }) as unknown as Awaited<
                 ReturnType<typeof undiciFetch>
             >,

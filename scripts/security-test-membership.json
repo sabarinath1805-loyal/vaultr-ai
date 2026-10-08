@@ -10,6 +10,8 @@
       "name": "WS1 parser isolation",
       "runner": "backend-vitest",
       "files": [
+        "src/lib/__tests__/officeArchive.security.test.ts",
+        "src/lib/__tests__/officeParserAdmission.security.test.ts",
         "src/lib/__tests__/runtimeConfig.test.ts",
         "src/lib/__tests__/spreadsheet.test.ts",
         "src/lib/__tests__/spreadsheetSupervisor.test.ts",
@@ -143,6 +145,7 @@
         "src/lib/dbq/__tests__/handlers.test.ts",
         "src/lib/httpError.test.ts",
         "src/lib/mcp/__tests__/client.ssrf.test.ts",
+        "src/lib/mcp/__tests__/client.bounds.security.test.ts",
         "src/lib/mcp/__tests__/errors.concise.test.ts",
         "src/lib/observability/sentryPrivacy.test.ts",
         "src/middleware/internalErrorResponse.test.ts",
@@ -215,6 +218,7 @@
       "runner": "node",
       "files": [
         "scripts/audit-gate.test.mjs",
+        "scripts/dependency-security.test.cjs",
         "scripts/ws7-verify/test.mjs"
       ]
     }

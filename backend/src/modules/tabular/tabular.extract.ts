@@ -8,6 +8,7 @@ import {
     isWordDocumentType,
 } from "../../lib/documentTypes";
 import { extractPresentationText } from "../../lib/officeText";
+import { loadOfficeArchive } from "../../lib/officeArchive";
 import { spreadsheetToLLMText } from "../../lib/spreadsheet";
 import {
     completeText,
@@ -280,6 +281,9 @@ export async function extractPdfMarkdown(buf: ArrayBuffer): Promise<string> {
 }
 
 export async function extractDocxMarkdown(buf: ArrayBuffer): Promise<string> {
+    // Admission failures must propagate rather than become an empty success.
+    // Run before path normalization or Mammoth, both of which expand entries.
+    await loadOfficeArchive(Buffer.from(buf));
     try {
         const mammoth = await import("mammoth");
         const normalized = await normalizeDocxZipPaths(Buffer.from(buf));

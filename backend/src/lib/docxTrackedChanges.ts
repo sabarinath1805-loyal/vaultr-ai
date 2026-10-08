@@ -14,7 +14,8 @@
  * (accepting that insertion) before the new change is emitted.
  */
 
-import JSZip from "jszip";
+import type JSZip from "jszip";
+import { loadOfficeArchive } from "./officeArchive";
 import { XMLParser, XMLBuilder } from "fast-xml-parser";
 
 // ---------------------------------------------------------------------------
@@ -699,7 +700,7 @@ function maxTrackedId(doc: XNode[]): number {
  * anchor matcher operates against.
  */
 export async function extractDocxBodyText(bytes: Buffer): Promise<string> {
-    const zip = await JSZip.loadAsync(bytes);
+    const zip = await loadOfficeArchive(bytes);
     const docXmlFile = getZipEntry(zip, "word/document.xml");
     if (!docXmlFile) return "";
     const docXmlRaw = await docXmlFile.async("string");
@@ -740,7 +741,7 @@ export async function extractDocxBodyText(bytes: Buffer): Promise<string> {
 export async function extractTrackedChangeIds(
     bytes: Buffer,
 ): Promise<{ kind: "ins" | "del"; w_id: string }[]> {
-    const zip = await JSZip.loadAsync(bytes);
+    const zip = await loadOfficeArchive(bytes);
     const docXmlFile = getZipEntry(zip, "word/document.xml");
     if (!docXmlFile) return [];
     const docXmlRaw = await docXmlFile.async("string");
@@ -774,7 +775,7 @@ export async function applyTrackedEdits(
     const author = opts?.author ?? "Mike";
     const now = new Date().toISOString();
 
-    const zip = await JSZip.loadAsync(bytes);
+    const zip = await loadOfficeArchive(bytes);
     const docXmlFile = getZipEntry(zip, "word/document.xml");
     if (!docXmlFile) throw new Error("document.xml missing from docx");
     const docXmlRaw = await docXmlFile.async("string");
@@ -1110,7 +1111,7 @@ export async function resolveTrackedChange(
     changeIds: string[],
     mode: "accept" | "reject",
 ): Promise<{ bytes: Buffer; found: boolean }> {
-    const zip = await JSZip.loadAsync(bytes);
+    const zip = await loadOfficeArchive(bytes);
     const docXmlFile = getZipEntry(zip, "word/document.xml");
     if (!docXmlFile) throw new Error("document.xml missing from docx");
     const docXmlRaw = await docXmlFile.async("string");

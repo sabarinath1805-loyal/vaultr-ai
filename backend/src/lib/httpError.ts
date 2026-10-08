@@ -1,5 +1,5 @@
 import type { Response } from "express";
-import { reportError, requestRoutePattern } from "./observability/sentry";
+import { redactUrl, reportError, reportedConsoleSummary, requestRoutePattern } from "./observability/sentry";
 
 export const INTERNAL_ERROR_CODE = "internal_error";
 export const INTERNAL_ERROR_MESSAGE =
@@ -23,7 +23,7 @@ const SAFE_CODE = /^[A-Za-z0-9_]{2,40}$/;
  * - its message is fixed text plus, at most, that code. The dependency's own
  *   `message`/`details`/`hint` can quote table names or row values, so they
  *   are never copied into the message; they remain reachable through `cause`
- *   in the server log only.
+ *   in the privacy-filtered diagnostic reporter only.
  */
 export function asReportableError(
   value: unknown,
@@ -81,8 +81,8 @@ export function sendInternalError(
   console.error("[http/internal-error]", {
     requestId,
     method: res.req?.method,
-    path: res.req?.originalUrl?.split("?")[0],
-    error: error,
+    path: redactUrl(requestRoutePattern(res.req) ?? ""),
+    error: reportedConsoleSummary(error),
   });
 
   return res.status(status).json({

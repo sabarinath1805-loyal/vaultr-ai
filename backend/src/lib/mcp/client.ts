@@ -717,15 +717,19 @@ export async function guardedFetch(
     );
 
     for (let hop = 0; hop < MAX_MCP_REDIRECTS; hop++) {
-        if (response.status < 300 || response.status > 399) return response;
+        if (response.status < 300 || response.status > 399) {
+            return boundedResponse(response, controller, effective, clearTotalTimeout);
+        }
         const location = response.headers.get("location");
-        if (!location) return response;
+        if (!location) {
+            return boundedResponse(response, controller, effective, clearTotalTimeout);
+        }
 
         let target: string;
         try {
             target = new URL(location, url).toString();
         } catch {
-            return response;
+            return boundedResponse(response, controller, effective, clearTotalTimeout);
         }
         await response.body?.cancel().catch(() => undefined);
 

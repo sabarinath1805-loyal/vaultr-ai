@@ -10,7 +10,9 @@ import {
   sendInternalError,
 } from "../lib/httpError";
 import {
+  redactUrl,
   reportMessage,
+  reportedConsoleSummary,
   requestRoutePattern,
 } from "../lib/observability/sentry";
 import { sendRateLimitStoreUnavailable } from "../lib/rateLimit";
@@ -92,9 +94,9 @@ export function protectInternalErrorResponses(
     console.error("[http/sanitized-internal-error]", {
       requestId,
       method: req.method,
-      path: req.originalUrl.split("?")[0],
+      path: redactUrl(route ?? ""),
       status: res.statusCode,
-      error: errorBody?.detail ?? body,
+      error: reportedConsoleSummary(errorBody?.detail ?? body),
     });
 
     return originalJson(publicBody);
