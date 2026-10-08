@@ -9,12 +9,10 @@ should use the latest published baseline or a newer reviewed `main` commit.
 
 ## Reporting a vulnerability
 
-**TODO for the repository owner:** configure and publish a private reporting
-channel before inviting external security reports. Add the private contact or
-enable and link GitHub private vulnerability reporting here. Do not invent or
-use a public issue for sensitive details. Until this is configured, contact
-the repository owner through an already-known private channel and share only
-the minimum information needed to establish contact.
+Use [GitHub private vulnerability reporting](https://github.com/sabarinath1805-loyal/vaultr-ai/security/advisories/new)
+to report a suspected vulnerability privately to the repository maintainers.
+Private vulnerability reporting is enabled for this repository. Do not open
+a public issue containing sensitive vulnerability details.
 
 Do not include real client documents, credentials, bearer tokens, signed URLs,
 or production data in a report. Acknowledge receipt and coordinate disclosure

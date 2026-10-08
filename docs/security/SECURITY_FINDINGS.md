@@ -1,5 +1,9 @@
 # Security findings — 8 October 2026
 
+Assessment snapshot: subsequent CI and GitHub protection changes are recorded in
+[the security delivery report](SECURITY_MERGE_CI_BRANCH_PROTECTION_2026-10-08.md).
+Original findings and test evidence below are preserved as assessed.
+
 Assessment starts at `1c53d65fb17c688396a48aea0e21ec29fbdc5941`.
 Priority P0–P3 is remediation order, separate from advisory severity. Findings
 below are source-grounded; no production exploitation or customer data access

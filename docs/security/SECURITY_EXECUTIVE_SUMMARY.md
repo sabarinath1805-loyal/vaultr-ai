@@ -1,5 +1,9 @@
 # Security assessment — 8 October 2026
 
+Assessment snapshot: subsequent CI and GitHub protection changes are recorded in
+[the security delivery report](SECURITY_MERGE_CI_BRANCH_PROTECTION_2026-10-08.md).
+Original findings and test evidence below are preserved as assessed.
+
 Reviewed backend, frontend, Word, AI/tool authorization, MCP/OAuth, database/storage source, dependencies and GitHub CI settings. Starting revision: 1c53d65fb17c688396a48aea0e21ec29fbdc5941. Dedicated branch: security/comprehensive-hardening. No push, merge, deployment or history rewrite performed.
 
 Three Medium application weaknesses fixed with failing-before/passing-after regressions: MCP GET response byte admission, sensitive central console errors, Office archive expansion. No new Critical or High application vulnerability established in examined paths; this is not proof of absence.
