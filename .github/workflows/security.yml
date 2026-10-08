@@ -44,6 +44,8 @@ jobs:
       contents: read
     runs-on: ubuntu-latest
     strategy:
+      # A finding in one tree must not cancel another tree's security audit.
+      fail-fast: false
       # npm throttles concurrent advisory requests from one runner egress IP.
       # Serialize the four lockfile scans so one workspace cannot force the
       # others onto the retired quick-audit endpoint or into a timeout.
