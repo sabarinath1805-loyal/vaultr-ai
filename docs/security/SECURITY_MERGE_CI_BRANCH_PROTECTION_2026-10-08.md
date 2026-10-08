@@ -4,6 +4,8 @@ Requested report filename date: 2026-10-08. Execution continued on 9 October 202
 
 ## A. Executive Summary
 
+Final audit refresh: the earlier 0 Critical / 19 High / 0 Moderate / 0 Low snapshot changed without dependency or lockfile edits. Current full audits report **1 Critical / 19 High / 0 Moderate / 0 Low**, including newly reported Word development-tree handlebars advisories. Production-only audits remain zero. This task did not upgrade dependencies or suppress the new finding.
+
 The comprehensive security branch was reviewed, freshly validated and fast-forwarded normally into remote main at d28bda0d40600bf59deb55b8e0c7c3901728fad8. CI pinning and explicit permissions were implemented in PR #1. Protection and repository-wide SHA enforcement are active. PR #1 merged normally after all eight required checks passed; its integration revision is 2b6bf585d05ed067e28f49b55d9f3b8da833faa3. No history rewrite, force push, branch deletion or production infrastructure change was performed.
 
 ## B. Git History
@@ -134,11 +136,13 @@ From repository root with existing Node 22.23.3/npm 10.9.9:
 | npm run test:security (after CI policy addition) | 1533 passed / 0 failed / 16 skipped |
 | git diff --check | PASS |
 
-Pinned suites overlap full suites; totals are not summed. Existing skips remain explicit. Fresh full and --omit=dev audits were run in backend/frontend/word-addin using npm audit --json, plus root --package-lock-only. Full C/H/M/L totals: 0/19/0/0 (frontend 7 High, Word 12 High); production-only zero across all four trees. JSON metadata validated; scanner exit 1 was vulnerability reporting, not ignored failure. No dependency reinstall/upgrade, lock change or audit suppression.
+Pinned suites overlap full suites; totals are not summed. Existing skips remain explicit. Fresh full and --omit=dev audits were run in backend/frontend/word-addin using npm audit --json, plus root --package-lock-only. Initial full C/H/M/L totals: 0/19/0/0 (frontend 7 High, Word 12 High); production-only zero across all four trees. Final refresh returned 1/19/0/0: root and backend zero; frontend 7 High; Word 1 Critical plus 12 High. The same commands and unchanged locks were used. JSON metadata validated; scanner exit 1 was vulnerability reporting, not ignored failure. No dependency reinstall/upgrade, lock change or audit suppression.
 
 Local live cloud, Office, browser E2E, Docker, PostgreSQL/Redis and restore checks were not run. Hosted CI runs disposable services/browsers separately; their actual outcomes are recorded below. They do not prove hosted production configuration or real Microsoft Word behavior.
 
 ## I. Outstanding Risks
+
+- New final-audit finding: development-tree handlebars has Critical advisories [GHSA-8r5x-fm3f-whwj](https://github.com/advisories/GHSA-8r5x-fm3f-whwj) and [GHSA-p8wg-vrv2-v86f](https://github.com/advisories/GHSA-p8wg-vrv2-v86f), plus Moderate GHSA-xw65-4hp5-5hc7 on the same package. npm counts the affected package at its maximum severity, so the overall Moderate package count remains zero. npm reports a fix available; validate a focused dependency remediation separately. The installed Word production-only tree remains zero. No production exploitability or application impact is inferred from the development audit alone.
 
 - Optional hosted web E2E run [37860353274](https://github.com/sabarinath1805-loyal/vaultr-ai/actions/runs/37860353274) failed: 42 passed / 1 failed / 4 skipped. The tabular-review PDF upload test at e2e/tabular-reviews.spec.ts:271 timed out with Confirm disabled. Retry trace shows upload-session creation (201), signed URL requests (200), file-complete (200), and session polling (200); this isolates the observed failure to completion/selection after upload, but does not establish the underlying cause or prove it pre-existing. Retained as an open application/browser verification issue; assertions and checks were not weakened. No broad application change was made in this CI/settings task.
 
