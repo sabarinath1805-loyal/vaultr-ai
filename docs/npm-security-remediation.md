@@ -1,5 +1,8 @@
 # npm security remediation — 7 October 2026
 
+Historical report: [8 October follow-up](npm-zero-vulnerabilities-review.md)
+removes the sprintf-js path using a compatibility-tested argparse override.
+
 Scope: backend and frontend npm dependencies at baseline commit
 `8853ec5a352e35a54d5765c3cdc6c6cc7208687f`. Root and Word add-in
 lockfiles are unchanged. No audit suppressions or forced dependency upgrades.
