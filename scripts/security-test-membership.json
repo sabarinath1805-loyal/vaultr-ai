@@ -219,7 +219,8 @@
       "files": [
         "scripts/audit-gate.test.mjs",
         "scripts/dependency-security.test.cjs",
-        "scripts/ws7-verify/test.mjs"
+        "scripts/ws7-verify/test.mjs",
+        "scripts/check-workflow-security.test.cjs"
       ]
     }
   ]

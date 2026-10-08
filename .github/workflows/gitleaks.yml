@@ -16,11 +16,12 @@ on:
   pull_request:
     branches: [main]
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   gitleaks:
+    permissions:
+      contents: read
     name: gitleaks (full history)
     runs-on: ubuntu-latest
     env:
@@ -42,4 +43,19 @@ jobs:
           tar -xzf gitleaks.tar.gz gitleaks
 
       - name: Scan full history
-        run: ./gitleaks detect --no-banner --redact
+        run: |
+          # Preserve scanner failure while reporting only location metadata.
+          # Never upload the report or print matched credential values.
+          scan_status=0
+          ./gitleaks detect --no-banner --redact --report-format json \
+            --report-path "$RUNNER_TEMP/gitleaks.json" || scan_status=$?
+          node - "$RUNNER_TEMP/gitleaks.json" <<'NODE'
+          const fs = require('node:fs');
+          const file = process.argv[2];
+          if (fs.existsSync(file)) {
+            for (const { File, StartLine, RuleID, Commit } of JSON.parse(fs.readFileSync(file, 'utf8'))) {
+              console.log(JSON.stringify({ File, StartLine, RuleID, Commit }));
+            }
+          }
+          NODE
+          exit "$scan_status"

@@ -17,17 +17,21 @@ on:
   pull_request:
     branches: [main]
 
+permissions: {}
+
 jobs:
   backend:
+    permissions:
+      contents: read
     name: Backend build and tests
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
@@ -42,6 +46,11 @@ jobs:
         run: node -e "for (const f of ['package.json','package-lock.json']) JSON.parse(require('fs').readFileSync(f, 'utf8'))"
 
       - run: npm ci
+
+      - name: Workflow security policy
+        run: |
+          node ../scripts/check-workflow-security.cjs
+          node --test ../scripts/check-workflow-security.test.cjs
 
       # Runs the suite WITH the coverage-ratchet floors from
       # vitest.config.mts (see its thresholds comment): a coverage drop
@@ -65,15 +74,17 @@ jobs:
         run: bash scripts/test-google-workspace-db.sh
 
   frontend:
+    permissions:
+      contents: read
     name: Frontend build and tests
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm

@@ -44,8 +44,12 @@ concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: true
 
+permissions: {}
+
 jobs:
   playwright:
+    permissions:
+      contents: read
     timeout-minutes: 30
     runs-on: ubuntu-latest
     env:
@@ -59,9 +63,9 @@ jobs:
       # the other 27 of the 31 specs. Setup: docs/e2e-ci.md, "Enable the LLM specs".
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
@@ -139,7 +143,7 @@ jobs:
       # repository's own fresh-database schema — exactly what the README tells a
       # human to run on a new database (backend/schema.sql).
       - name: Start local Supabase
-        uses: supabase/setup-cli@v3
+        uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
         with:
           # Keep CI reproducible and avoid the GitHub API call needed to resolve
           # `latest`, which can fail when the shared runner hits its rate limit.
@@ -211,7 +215,7 @@ jobs:
             # Keep the release-job fixture reproducible even when the source
             # repository's main branch changes independently of this PR.
             echo "MIKE_WORKFLOWS_REF=ce62e6a2d3f47e1d3567a4f2edc61898cfe9e78a"
-            echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}"
+            printf 'ANTHROPIC_API_KEY=%s\n' "$ANTHROPIC_API_KEY"
             # Error reporting is on by default; CI runs must not report.
             echo "SENTRY_DISABLED=true"
           } >> backend/.env
@@ -256,7 +260,7 @@ jobs:
 
       # always() (not !cancelled()) so the report still uploads when the job is
       # cancelled by the timeout — that's exactly when you most need the traces.
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: playwright-report

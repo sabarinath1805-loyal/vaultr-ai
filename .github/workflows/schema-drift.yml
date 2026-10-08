@@ -54,13 +54,17 @@ env:
   # failure, because a failure means the two shapes genuinely differ.
   BASELINE_REF: 9a1277ba99cbd7dfae77e5b882e5cef8521fca2f
 
+permissions: {}
+
 jobs:
   drift:
+    permissions:
+      contents: read
     name: Fresh install vs upgraded deployment
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history: the baseline schema is read straight out of git
           # (`git show $BASELINE_REF:backend/schema.sql`), and the migration
@@ -70,7 +74,7 @@ jobs:
 
       # Pinned to match stack-tests.yml so both workflows test against the
       # same Postgres; bump the two together.
-      - uses: supabase/setup-cli@v3
+      - uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
         with:
           version: 2.108.0
 
