@@ -16,11 +16,12 @@ on:
   pull_request:
     branches: [main]
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   gitleaks:
+    permissions:
+      contents: read
     name: gitleaks (full history)
     runs-on: ubuntu-latest
     env:

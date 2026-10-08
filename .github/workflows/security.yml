@@ -9,8 +9,7 @@ on:
 # queries the npm registry — it never writes to the repo, issues, or checks.
 # Without this block the job token inherits the repository default, which
 # may be broader; OpenSSF Scorecard's Token-Permissions check verifies it.
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   # The gate's own regression suite. It asserts the FAIL-CLOSED contract —
@@ -21,6 +20,8 @@ jobs:
   # broken gate is legible as a broken gate rather than as four failing
   # workspace audits.
   audit-gate-tests:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,6 +40,8 @@ jobs:
   # would hide new advisories too); Dependabot (added in this PR) surfaces
   # the upstream releases that let entries be removed.
   dependency-audit:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     strategy:
       # npm throttles concurrent advisory requests from one runner egress IP.
@@ -78,13 +81,14 @@ jobs:
         run: node "$GITHUB_WORKSPACE/scripts/audit-gate.mjs"
 
   security-baseline:
+    permissions:
+      contents: read
     name: Frozen security baseline
     runs-on: ubuntu-latest
     steps:
-      # Official GitHub actions pinned by major version. The repository owner
-      # can replace these with reviewed full commit SHAs after verifying them.
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      # Official upstream commits verified before pinning.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
@@ -116,4 +120,7 @@ jobs:
       - name: Frontend production build
         run: npm run build --prefix frontend
       - name: Word add-in production build
+        env:
+          REACT_APP_WEB_APP_URL: https://app.example.com
+          WORD_ADDIN_PUBLIC_URL: https://word.example.com
         run: npm run build --prefix word-addin

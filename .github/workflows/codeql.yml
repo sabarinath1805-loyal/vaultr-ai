@@ -17,8 +17,7 @@ on:
     # Mondays 04:30 UTC.
     - cron: "30 4 * * 1"
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   analyze:
