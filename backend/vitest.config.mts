@@ -1,6 +1,10 @@
 import { defineConfig } from "vitest/config";
+import { fileURLToPath } from "node:url";
 
 export default defineConfig({
+  // Keep test paths relative to the backend when Stryker starts from the
+  // repository root to preserve cross-directory test support in its sandbox.
+  root: fileURLToPath(new URL(".", import.meta.url)),
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],

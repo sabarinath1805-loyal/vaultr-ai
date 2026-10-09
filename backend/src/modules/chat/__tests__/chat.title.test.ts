@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { completeText, reportError } = vi.hoisted(() => ({
     completeText: vi.fn(),
@@ -30,6 +30,10 @@ describe("logChatTitleFailure", () => {
         reportError.mockClear();
         vi.spyOn(console, "error").mockImplementation(() => {});
         vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
     });
 
     // console.error is what the Sentry console bridge files; console.warn is

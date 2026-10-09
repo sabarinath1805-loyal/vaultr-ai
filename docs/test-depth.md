@@ -37,44 +37,35 @@ npm run test:mutation
 
 Takes about a minute locally (~2 in CI). The **Mutation testing**
 workflow can be dispatched from the Actions tab and runs itself monthly
-as a drift check. It is **not** a PR gate — see "Blocked on vitest 5"
-below for why the promotion to one was held back.
+as a drift check. It is **not** a PR gate.
 
-### Blocked on vitest 5 (since 2026-09-11)
+### Mutation sandbox layout
 
-`npm run test:mutation` cannot currently produce a real score.
-`@stryker-mutator/vitest-runner` 10.0.0 — the latest release — does not
-work with vitest 5, which the repo moved to in #455 on 2026-09-11. Two
-separate breakages, both reproduced locally on 2026-09-14:
+The 2026-10-09 investigation reproduced `No tests were executed` on Vitest
+5 and 4. A standalone test inside the original sandbox exposed the actual
+setup failure: `../../../scripts/test-network-guard.cjs` was missing. This
+failure does not prove that the Vitest version is incompatible.
 
-1. **Hard crash.** Stryker's sandbox rewrites `tsconfig.json` with
-   `ts.parseConfigFileTextToJson`, an API TypeScript 7 removed, so the run
-   dies with `TypeError: ts.parseConfigFileTextToJson is not a function`
-   before mutating anything. `stryker.config.json` works around this by
-   pointing `tsconfigFile` at a name that does not exist — safe here
-   because `backend/tsconfig.json` has no `extends` and no `references`,
-   so the rewrite it skips is a no-op for this project.
-2. **Silent zero, no workaround.** Past the crash, the initial dry run
-   succeeds and per-test mutant coverage is collected, but the per-mutant
-   runs read back no test results at all (`Ran 0.00 tests per mutant on
-   average`). Every mutant is therefore scored "survived" and the total
-   is **0.00** — a red run that reads as "the tests collapsed" when
-   nothing about the tests changed. `coverageAnalysis: "all"`,
-   `vitest.related: false` and forced static mutant activation were all
-   tried; none of them changes the result.
+`npm run test:mutation` now starts Stryker from the repository root. The
+sandbox includes backend sources, the shared network guard, contracts, and
+tracked deployment example fixtures. Vitest keeps its root at `backend/`;
+fixture-reading tests resolve paths from their own source directory rather
+than the launching shell's working directory. The network guard remains
+installed. The five mutation targets, `perTest` analysis, static-mutant
+policy, and score floor of 69 are unchanged.
 
-So the harness fails loudly rather than lying green — but its failure
-message is misleading, and a 0.00 PR gate would block every
-security-lib PR for a reason that has nothing to do with the PR. That is
-why `mutation.yml` kept its dispatch + cron triggers instead of gaining
-the `pull_request:` trigger it was about to get.
+The backend pins Vitest and its coverage provider to 4.1.11. With the fixed
+sandbox, Vitest 5.0.1 completes the initial tests but still produces a 0.00
+mutation score with no tests executed per mutant. The compatible 4.1.11
+pair has a clean full dependency audit. A console-spy lifecycle regression
+exposed by this version is fixed by restoring the spies after each test;
+all assertions and tests remain present. Vitest 4.0.18 was rejected because
+its fresh dependency audit reported security findings.
 
-**Revival:** when `@stryker-mutator/*` ships vitest 5 support, bump it,
-run `npm run test:mutation`, confirm a real score, raise
-`thresholds.break` to the new measured floor, and add back the
-`pull_request:` trigger with a `paths:` filter matching the `mutate`
-array in `backend/stryker.config.json`. The last honest measurement is
-below.
+The TypeScript 7 sandbox workaround remains: `tsconfigFile` names a
+nonexistent file because Stryker calls a removed TypeScript API while
+rewriting configuration. The backend config has no `extends` or
+`references`, so that rewrite remains unnecessary.
 
 ### Reading the report
 
@@ -89,8 +80,7 @@ Open `backend/reports/mutation/mutation.html` (in CI: download the
   assertion gap.
 
 Scores last measured 2026-08-27 with all five files in scope, on vitest 4
-(green cron run 2026-09-03; see "Blocked on vitest 5" above for why there
-is no newer number): total 70.0
+(historical green cron run 2026-09-03): total 70.0
 (citations 79.2, verifyCitations 63.5, downloadTokens 65.4, access 63.8,
 privateIp 65.9). The access figure is mostly no-coverage mutants in
 `listAccessibleProjectIds`/`filterAccessibleDocumentIds` — its score on
@@ -170,13 +160,9 @@ removed workflow from git history as a starting point.
 
 ## What gates merges?
 
-- **Mutation testing does not gate anything today.** It is blocked on
-  vitest 5 support in `@stryker-mutator/vitest-runner` (above). The
-  monthly cron still runs, so the block stays visible in the Actions tab
-  instead of being forgotten. When the block lifts, the intended shape is
-  a path-filtered PR gate on the mutated security libs, their tests and
-  the harness itself: a measured run costs ~2 minutes, so gating those
-  PRs is cheap and unrelated PRs never pay it.
+- **Mutation testing is on demand and monthly.** Its sandbox preserves
+  cross-directory test support and deployment fixtures (above). The existing
+  score threshold still fails a genuine regression; an empty test run fails.
 - **The load harness never gates.** It needs a live stack and real
   provider keys, and it detects capacity/stability drift, not the
   correctness of a single diff — it is for before/after checks around

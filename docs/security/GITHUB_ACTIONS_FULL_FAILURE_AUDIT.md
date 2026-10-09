@@ -651,3 +651,47 @@ The original ten historical root causes remain grouped. Verification additionall
 | [37917238693](https://github.com/sabarinath1805-loyal/vaultr-ai/actions/runs/37917238693) Word add-in | `b65ff07b3bbe17b5b1cc34461704df82b8db361a` / fix/complete-github-ci-remediation / pull_request | 2026-10-09T10:22:52Z / 2026-10-09T10:30:14Z | 1 / success | Typecheck and Playwright (chromium + webkit): **success** | [37918500446](https://github.com/sabarinath1805-loyal/vaultr-ai/actions/runs/37918500446) |
 
 </details>
+
+
+## Current-code follow-up (2026-10-09)
+
+The separately authorized current-code repair uses one temporary branch,
+`fix/current-ci-green`, and PR #22. No additional historical inventory was
+performed. The final push on `bc231cb42d5bc7d0e678b332d428b873fa080392`
+was checked independently: its only failing Vaultr checks are the frontend
+and Word dependency audits (security run 37922076496).
+
+Fresh development-inclusive audits reproduce seven high affected packages in
+the frontend and twelve in Word, representing two advisories. Maintained
+parent releases were inspected: Next's ESLint plugin still uses fast-glob,
+Ladle/globby still use micromatch/braces, and webpack-dev-server's proxy
+middleware still uses micromatch/braces. Office add-in debugging/cert tooling
+and Microsoft TeamsFx still use node-forge through mkcert or TeamsFx itself.
+The two advisories still list no patched release. npm's proposed major
+parent downgrades were not applied. No compatible maintained drop-in
+replacement was established that preserves glob semantics, trusted developer
+certificates, and automatic Office sideloading. These vulnerabilities remain
+unresolved; this follow-up does not claim that an all-green main is achieved.
+
+The mutation investigation found two distinct problems: the original sandbox
+omits the shared network guard, causing setup failures before any tests run;
+and, after that is repaired, Vitest 5.0.1 still returns no executed tests per
+mutant and fails the unchanged threshold with a 0.00 score. The repair
+preserves the repository topology and tracked fixtures, pins the backend's
+Vitest/coverage pair to the audit-clean 4.1.11 release, and restores console
+spies after each test. All five targets, assertions, per-test coverage,
+static-mutant policy, network guard, and score floor of 69 are preserved.
+Hosted execution and its score must be checked before calling this repaired.
+
+Rerunning an original commit cannot supply these missing tracked sandbox
+inputs or change its incompatible dependencies. Those deterministic historical
+failures are not retroactively marked passing, and no original commit or
+result is rewritten.
+
+GitHub automatic deletion of merged PR heads is enabled. Merged temporary
+remote branches were deleted after ancestry or squash-tree equivalence checks.
+The two original author-rewrite-era commit IDs remain reachable from the local
+`archive/pre-author-rewrite-a620cba` tag; duplicate local branches were removed.
+Ten Dependabot branches have active, unmerged PRs and are retained. Main's
+active ruleset remains unchanged. The current repair head is temporary and
+must not be deleted while it contains unmerged work.

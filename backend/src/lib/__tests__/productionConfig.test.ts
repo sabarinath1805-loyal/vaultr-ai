@@ -32,11 +32,11 @@ const validProduction = {
 
 function sensitiveValuesFromRepository(): string[] {
   const files = [
-    resolve(process.cwd(), "../.env.example"),
-    resolve(process.cwd(), ".env.example"),
-    resolve(process.cwd(), "../frontend/.env.local.example"),
-    resolve(process.cwd(), "../word-addin/.env.example"),
-    resolve(process.cwd(), "../docker-compose.yml"),
+    resolve(__dirname, "../../..", "../.env.example"),
+    resolve(__dirname, "../../..", ".env.example"),
+    resolve(__dirname, "../../..", "../frontend/.env.local.example"),
+    resolve(__dirname, "../../..", "../word-addin/.env.example"),
+    resolve(__dirname, "../../..", "../docker-compose.yml"),
   ];
   const sensitiveName =
     /(?:SECRET|PASSWORD|TOKEN|JWT_SECRET|(?:API|ANON|PUBLISHABLE|SERVICE_ROLE|PRIVATE|ACCESS|SECRET)_KEY(?:_ID)?|_KEY)$/i;
