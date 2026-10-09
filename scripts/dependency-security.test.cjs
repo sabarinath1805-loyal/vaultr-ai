@@ -7,6 +7,17 @@ const { test } = require('node:test');
 const root = path.resolve(__dirname, '..');
 const from = tree => createRequire(path.join(root, tree, 'package.json'));
 
+test('Handlebars rejects malformed AST block parameters and preserves escaped templates', () => {
+    const handlebars = from('word-addin')('handlebars');
+    assert.throws(() => handlebars.precompile({
+        type: 'Program',
+        body: [],
+        blockParams: { length: 'malformed' },
+        strip: {},
+    }), /Invalid AST/);
+    assert.equal(handlebars.compile('Hello {{name}}')({ name: '<guest>' }), 'Hello &lt;guest&gt;');
+});
+
 // These are behavioral checks, not substitutes for npm audit. In particular,
 // the normal glob/DOCX checks do not claim to patch unresolved advisories.
 test('patched proxy trust rejects unrelated IPv4 addresses for mapped subnets', () => {

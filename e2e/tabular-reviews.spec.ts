@@ -264,7 +264,16 @@ test("adds a document to a tabular review and the row appears in the table", asy
     const fileChooserPromise = page.waitForEvent("filechooser");
     await uploadBtn.click();
     const fileChooser = await fileChooserPromise;
+    // Observe the real signed object upload before waiting for selection.
+    // A missing frontend storage CSP origin blocks this request entirely;
+    // retries or a longer Confirm timeout cannot repair that configuration.
+    const uploadedObject = page.waitForResponse(
+        response => response.request().method() === "PUT"
+            && new URL(response.url()).pathname.includes("/upload-sessions/"),
+        { timeout: 20_000 },
+    );
     await fileChooser.setFiles(PDF_FIXTURE);
+    expect((await uploadedObject).ok()).toBe(true);
 
     // After a successful upload the server document is auto-selected and the
     // "Confirm" button transitions disabled → enabled.

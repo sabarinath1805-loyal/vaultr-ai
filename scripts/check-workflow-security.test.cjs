@@ -45,3 +45,26 @@ test('rejects missing workflow/job structure and mixed run/uses steps', () => {
   const f = fixture(); delete f.jobs.build['runs-on']; f.jobs.build.steps[0].run = 'echo hi';
   assert.equal(validateWorkflow(f, 'ci.yml').length, 2);
 });
+test('rejects independently upgraded CodeQL init/analyze actions', () => {
+  const f = fixture();
+  f.jobs.build.steps = [
+    { uses: `github/codeql-action/init@${sha}` },
+    { uses: `github/codeql-action/analyze@${'b'.repeat(40)}` },
+  ];
+  assert.ok(validateWorkflow(f, 'codeql.yml').some(e => e.includes('same commit SHA')));
+  f.jobs.build.steps[1].uses = `github/codeql-action/analyze@${sha}`;
+  assert.deepEqual(validateWorkflow(f, 'codeql.yml'), []);
+});
+test('E2E frontend CSP permits the configured local signed-upload origin', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const YAML = require('../backend/node_modules/yaml');
+  const workflow = YAML.parse(fs.readFileSync(path.join(__dirname, '../.github/workflows/e2e.yml'), 'utf8'));
+  const steps = workflow.jobs.playwright.steps;
+  const backend = steps.find(step => step.run?.includes('> backend/.env')).run;
+  const frontend = steps.find(step => step.run?.includes('> frontend/.env.local')).run;
+  const storageOrigin = backend.match(/echo "R2_ENDPOINT_URL=([^"]+)"/)?.[1];
+  const cspOrigin = frontend.match(/echo "R2_PUBLIC_ENDPOINT_URL=([^"]+)"/)?.[1];
+  assert.equal(storageOrigin, 'http://localhost:9000');
+  assert.equal(cspOrigin, storageOrigin);
+});
