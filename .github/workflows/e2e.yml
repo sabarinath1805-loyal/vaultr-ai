@@ -223,6 +223,9 @@ jobs:
           # needs the upstream backend origin.
           {
             echo "API_BASE_URL=http://localhost:3001"
+            # The browser uploads directly to RustFS. Match the signed upload
+            # origin in the existing CSP policy without allowing arbitrary hosts.
+            echo "R2_PUBLIC_ENDPOINT_URL=http://localhost:9000"
             echo "SENTRY_DISABLED=true"
             echo "NEXT_PUBLIC_SENTRY_DISABLED=true"
           } > frontend/.env.local

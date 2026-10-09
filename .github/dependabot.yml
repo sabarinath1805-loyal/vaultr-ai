@@ -100,3 +100,8 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    groups:
+      # init/analyze share versioned configuration. Updating only one causes
+      # CodeQL to reject the configuration before analysis can run.
+      codeql:
+        patterns: ["github/codeql-action*"]

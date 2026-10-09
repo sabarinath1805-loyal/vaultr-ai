@@ -37,6 +37,12 @@ function validateWorkflow(workflow, filename) {
       }
     }
     if (!job.uses && (!job['runs-on'] || !Array.isArray(job.steps))) errors.push(`${where}: runs-on and steps required`);
+    const codeqlRefs = new Set((job.steps || [])
+      .map(step => typeof step.uses === 'string'
+        ? step.uses.match(/^github\/codeql-action\/(?:init|analyze)@(.+)$/)?.[1]
+        : undefined)
+      .filter(Boolean));
+    if (codeqlRefs.size > 1) errors.push(`${where}: CodeQL init and analyze must use the same commit SHA`);
     for (const [index, step] of (job.steps || []).entries()) {
       if (step.uses) checkUse(step.uses, `${where}:step${index}`);
       if (step.uses && step.run) errors.push(`${where}: step cannot both use an action and run shell`);
