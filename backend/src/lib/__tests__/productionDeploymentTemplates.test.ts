@@ -4,9 +4,9 @@ import { parse as parseYaml } from "yaml";
 import { describe, expect, it } from "vitest";
 import { evaluateProductionConfiguration } from "../productionConfig";
 
-const composePath = resolve(process.cwd(), "../deploy/docker-compose.prod.yml");
-const caddyPath = resolve(process.cwd(), "../deploy/Caddyfile");
-const envPath = resolve(process.cwd(), "../deploy/.env.production.example");
+const composePath = resolve(__dirname, "../../..", "../deploy/docker-compose.prod.yml");
+const caddyPath = resolve(__dirname, "../../..", "../deploy/Caddyfile");
+const envPath = resolve(__dirname, "../../..", "../deploy/.env.production.example");
 const composeText = readFileSync(composePath, "utf8");
 const caddyText = readFileSync(caddyPath, "utf8");
 const envText = readFileSync(envPath, "utf8");

@@ -6,22 +6,10 @@
 # vitest suite per mutant. A surviving mutant = a behavior change (e.g. an
 # access check inverted, a blocked IP range allowed) that no test caught.
 #
-# ON-DEMAND + monthly cron, NOT a PR gate. It was going to become a
-# path-filtered PR gate in this PR (the step docs/test-depth.md named as the
-# natural next stage, and a measured run takes ~2 minutes, not the ~10 the
-# original header guessed). That promotion is held back because the harness
-# cannot currently produce a real score: @stryker-mutator/vitest-runner 10
-# does not work with vitest 5, which landed in #455 on 2026-09-11. The
-# runner starts the mutant runs but reads back zero test results, so every
-# mutant is scored "survived" and the total is 0.00 — a red run that says
-# "your tests collapsed" when nothing about the tests changed. Gating PRs on
-# that would be worse than not gating them at all.
-#
-# The last honest score is the 2026-09-03 cron run (green, on vitest 4).
-# docs/test-depth.md records the evidence and the revival condition; when
-# @stryker-mutator/* ships vitest 5 support, bump it, confirm a real score
-# locally, and add the `pull_request:` trigger with a path filter matching
-# the `mutate` array in backend/stryker.config.json.
+# ON-DEMAND + monthly cron. Run from the repository root so the sandbox
+# preserves backend imports of shared test support and tracked deployment
+# fixtures. Vitest remains at the same version used by the regular test suite.
+# A missing setup dependency can otherwise look like zero collected tests.
 #
 # `thresholds.break` in stryker.config.json fails any run whose score
 # regresses below the documented floor. See docs/test-depth.md.
