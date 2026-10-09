@@ -52,7 +52,15 @@ tracked deployment example fixtures. Vitest keeps its root at `backend/`;
 fixture-reading tests resolve paths from their own source directory rather
 than the launching shell's working directory. The network guard remains
 installed. The five mutation targets, `perTest` analysis, static-mutant
-policy, and score floor of 69 are unchanged. No dependency downgrade is used.
+policy, and score floor of 69 are unchanged.
+
+The backend pins Vitest and its coverage provider to 4.1.11. With the fixed
+sandbox, Vitest 5.0.1 completes the initial tests but still produces a 0.00
+mutation score with no tests executed per mutant. The compatible 4.1.11
+pair has a clean full dependency audit. A console-spy lifecycle regression
+exposed by this version is fixed by restoring the spies after each test;
+all assertions and tests remain present. Vitest 4.0.18 was rejected because
+its fresh dependency audit reported security findings.
 
 The TypeScript 7 sandbox workaround remains: `tsconfigFile` names a
 nonexistent file because Stryker calls a removed TypeScript API while
