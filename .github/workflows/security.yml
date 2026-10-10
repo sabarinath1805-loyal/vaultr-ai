@@ -3,6 +3,7 @@ name: security
 on:
   push:
     branches: [main]
+    tags: ["ci-preflight-*"]
   pull_request:
 
 # Least privilege for the job token: this workflow only reads the repo and

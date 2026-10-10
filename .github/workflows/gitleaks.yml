@@ -13,6 +13,7 @@ name: Secret scan
 on:
   push:
     branches: [main]
+    tags: ["ci-preflight-*"]
   pull_request:
     branches: [main]
 
